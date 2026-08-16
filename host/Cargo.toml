@@ -1,0 +1,18 @@
+[package]
+name = "stealth-bonding-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "File-vault test Host for Stealth Bonding (no passkey sheet, no radio)"
+publish = false
+
+[[bin]]
+name = "sb-host"
+path = "src/bin/sb_host.rs"
+
+[[bin]]
+name = "sb-accessory"
+path = "src/bin/sb_accessory.rs"
+
+[dependencies]
+stealth-bonding-sim = { path = "../sim" }

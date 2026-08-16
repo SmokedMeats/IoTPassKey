@@ -4,7 +4,11 @@ use crate::crypto::{
     vault_secret_from_identity, verify, Nonce, PublicKeyBytes, Secret, SignatureBytes, UnitSerial,
     DEFAULT_MANUFACTURER_SECRET,
 };
-use crate::pdu::{StealthBondingParams, PARAMS_LEN, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE};
+use crate::pdu::{
+    StealthBondingAssertion, StealthBondingAttestation, StealthBondingAttestationRequest,
+    StealthBondingParams, StealthBondingRegister, ATTESTATION_LEN, ATTESTATION_REQUEST_LEN,
+    PARAMS_LEN, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE, REGISTER_LEN,
+};
 
 pub const T_SB_ENROLL_MS: u32 = 30_000;
 pub const T_SB_ENROLL_MAX_MS: u32 = 180_000;
@@ -108,6 +112,9 @@ pub struct PairingOutcome {
     pub reconnect_mode: ReconnectMode,
     pub params_pdu: Option<[u8; PARAMS_LEN]>,
     pub params_response_pdu: Option<[u8; PARAMS_LEN]>,
+    pub attestation_request_pdu: Option<[u8; ATTESTATION_REQUEST_LEN]>,
+    pub attestation_pdu: Option<[u8; ATTESTATION_LEN]>,
+    pub register_pdu: Option<[u8; REGISTER_LEN]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,6 +224,15 @@ pub struct Accessory {
     next_challenge: u32,
     replay_assertion_challenge: bool,
     last_assertion_challenge: Option<Nonce>,
+    pending_enrollment: Option<PendingEnrollment>,
+}
+
+struct PendingEnrollment {
+    host_identity: [u8; 6],
+    policy: StealthPolicy,
+    reconnect: ReconnectMode,
+    nonce: Nonce,
+    require_delegated_confirm: bool,
 }
 
 pub struct Host {
@@ -286,6 +302,7 @@ impl Accessory {
             next_challenge: 1,
             replay_assertion_challenge: false,
             last_assertion_challenge: None,
+            pending_enrollment: None,
         }
     }
 
@@ -354,6 +371,186 @@ impl Accessory {
             self.product_name,
             unit_serial_suffix(&self.unit_serial)
         )
+    }
+
+    pub fn identity(&self) -> [u8; 6] {
+        self.identity
+    }
+
+    pub fn respond_to_params(
+        &mut self,
+        params: StealthBondingParams,
+    ) -> Result<StealthBondingParams, PairingError> {
+        if !matches!(self.state, GapState::Enrollment) {
+            return Err(PairingError::NotEnrolling);
+        }
+        if self.bonds.len() >= self.capacity as usize {
+            return Err(PairingError::TableFull);
+        }
+        if !self.supports_le_sc {
+            return Err(PairingError::LegacyPairingForbidden);
+        }
+        if !self.supports_stealth_bonding {
+            return Err(PairingError::ParamsRejected);
+        }
+        if self.pending_authorizer.is_some() && !self.delegated_confirmed {
+            return Err(PairingError::DelegatedConfirmRequired);
+        }
+        self.pending_enrollment = Some(PendingEnrollment {
+            host_identity: [0; 6],
+            policy: params.policy,
+            reconnect: params.reconnect,
+            nonce: [0; 32],
+            require_delegated_confirm: params.require_delegated_confirm,
+        });
+        Ok(StealthBondingParams {
+            policy: params.policy,
+            reconnect: params.reconnect,
+            require_delegated_confirm: params.require_delegated_confirm,
+            allow_peer_policy_change: params.allow_peer_policy_change,
+            max_bonds: self.capacity,
+        })
+    }
+
+    pub fn attest_for_host(
+        &mut self,
+        host_identity: [u8; 6],
+        nonce: Nonce,
+    ) -> Result<StealthBondingAttestation, PairingError> {
+        let Some(pending) = self.pending_enrollment.as_mut() else {
+            return Err(PairingError::NotEnrolling);
+        };
+        pending.host_identity = host_identity;
+        pending.nonce = nonce;
+        let Some(factory_secret) = self.factory_secret.as_ref() else {
+            return Err(PairingError::AttestationFailed);
+        };
+        let Some(unit_cert) = self.unit_cert.as_ref() else {
+            return Err(PairingError::AttestationFailed);
+        };
+        let unit_public = public_key(factory_secret);
+        let host_sc_public = fixture_sc_public(host_identity);
+        let accessory_sc_public = fixture_sc_public(self.identity);
+        let signed = if self.omit_sc_from_attestation {
+            let mut message = Vec::with_capacity(6 + 6 + 1 + 1 + 32);
+            message.extend_from_slice(&host_identity);
+            message.extend_from_slice(&self.identity);
+            message.push(pending.policy.code());
+            message.push(pending.reconnect.code());
+            message.extend_from_slice(&nonce);
+            message
+        } else {
+            attestation_message(
+                host_identity,
+                self.identity,
+                pending.policy.code(),
+                pending.reconnect.code(),
+                &nonce,
+                &host_sc_public,
+                &accessory_sc_public,
+            )
+        };
+        Ok(StealthBondingAttestation {
+            nonce,
+            unit_public,
+            unit_serial: self.unit_serial,
+            unit_cert: *unit_cert,
+            attestation: sign(factory_secret, &signed),
+        })
+    }
+
+    pub fn accept_register(
+        &mut self,
+        register: StealthBondingRegister,
+        host_identity: [u8; 6],
+    ) -> Result<(), PairingError> {
+        let pending = self
+            .pending_enrollment
+            .take()
+            .ok_or(PairingError::NotEnrolling)?;
+        if pending.host_identity != host_identity {
+            self.pending_enrollment = Some(pending);
+            return Err(PairingError::AttestationFailed);
+        }
+        let ltk = fixture_ltk(host_identity, self.identity);
+        if pending.policy.accessory_leaves_public() {
+            if self.controller_can_leave_public_advertising {
+                self.enter_bonded_reconnect(Some(pending.reconnect));
+            } else {
+                self.advertising = Advertising::Undirected { local_name: None };
+            }
+            if self.advertising.is_public() {
+                self.state = GapState::Enrollment;
+                self.advertising = Advertising::Undirected {
+                    local_name: Some("Accessory".into()),
+                };
+                return Err(PairingError::CommitmentFailed);
+            }
+        } else {
+            self.state = GapState::PublicBonded;
+            self.advertising = Advertising::Undirected {
+                local_name: Some("Accessory".into()),
+            };
+        }
+        self.require_delegated_confirm = pending.require_delegated_confirm;
+        self.clear_enrollment_clock();
+        self.bonds.push(StoredBond {
+            id: BondPasskeyId(register.credential_id),
+            peer_identity: host_identity,
+            ltk,
+            policy: pending.policy,
+            reconnect: pending.reconnect,
+            public_key: register.public_key,
+        });
+        Ok(())
+    }
+
+    pub fn issue_challenge(&mut self) -> Result<Nonce, ReconnectError> {
+        if self.bonds.is_empty() {
+            return Err(ReconnectError::NoBond);
+        }
+        match self.state {
+            GapState::BondedKnock | GapState::PublicBonded | GapState::Enrollment => {}
+            GapState::BondedSilent | GapState::Unprovisioned => {
+                return Err(ReconnectError::NotConnectable);
+            }
+        }
+        let challenge = if self.replay_assertion_challenge {
+            self.replay_assertion_challenge = false;
+            self.last_assertion_challenge
+                .ok_or(ReconnectError::AssertionReplay)?
+        } else {
+            let challenge = nonce_from_counter(self.next_challenge);
+            self.next_challenge += 1;
+            challenge
+        };
+        if self.used_assertion_challenges.contains(&challenge) {
+            return Err(ReconnectError::AssertionReplay);
+        }
+        Ok(challenge)
+    }
+
+    pub fn accept_assertion(
+        &mut self,
+        challenge: Nonce,
+        assertion: StealthBondingAssertion,
+    ) -> Result<BondedLink, ReconnectError> {
+        if self.used_assertion_challenges.contains(&challenge) {
+            return Err(ReconnectError::AssertionReplay);
+        }
+        let message = assertion_message(&challenge, self.identity);
+        let Some(accessory_bond) = self.bonds.iter().find(|bond| {
+            bond.id.0 == assertion.credential_id
+                && verify(&bond.public_key, &message, &assertion.signature)
+        }) else {
+            return Err(ReconnectError::NoBond);
+        };
+        let id = accessory_bond.id;
+        self.used_assertion_challenges.push(challenge);
+        self.last_assertion_challenge = Some(challenge);
+        Ok(BondedLink {
+            bond_passkey_id: Some(id),
+        })
     }
 
     pub fn replay_next_assertion_challenge(&mut self) {
@@ -444,6 +641,7 @@ impl Accessory {
         self.enrollment_remaining_ms = None;
         self.used_assertion_challenges.clear();
         self.last_assertion_challenge = None;
+        self.pending_enrollment = None;
         self.state = GapState::Unprovisioned;
         self.advertising = Advertising::Undirected {
             local_name: Some("Accessory".into()),
@@ -673,6 +871,9 @@ pub fn pair(
             reconnect_mode: offer.reconnect,
             params_pdu: None,
             params_response_pdu: None,
+            attestation_request_pdu: None,
+            attestation_pdu: None,
+            register_pdu: None,
         });
     }
 
@@ -722,6 +923,10 @@ pub fn pair(
         }
     }
 
+    let attestation_request_pdu = StealthBondingAttestationRequest { nonce }.encode();
+    let request = StealthBondingAttestationRequest::decode(&attestation_request_pdu)
+        .map_err(|_| PairingError::AttestationFailed)?;
+
     let host_sc_public = fixture_sc_public(host.identity);
     let accessory_sc_public = fixture_sc_public(accessory.identity);
 
@@ -735,21 +940,13 @@ pub fn pair(
         return Err(PairingError::AttestationFailed);
     };
     let unit_public = public_key(factory_secret);
-    if !verify(
-        manufacturer,
-        &unit_cert_message(&unit_public, &accessory.unit_serial),
-        unit_cert,
-    ) {
-        return Err(PairingError::AttestationFailed);
-    }
-
     let signed = if accessory.omit_sc_from_attestation {
         let mut message = Vec::with_capacity(6 + 6 + 1 + 1 + 32);
         message.extend_from_slice(&host.identity);
         message.extend_from_slice(&accessory.identity);
         message.push(offer.policy.code());
         message.push(offer.reconnect.code());
-        message.extend_from_slice(&nonce);
+        message.extend_from_slice(&request.nonce);
         message
     } else {
         attestation_message(
@@ -757,33 +954,63 @@ pub fn pair(
             accessory.identity,
             offer.policy.code(),
             offer.reconnect.code(),
-            &nonce,
+            &request.nonce,
             &host_sc_public,
             &accessory_sc_public,
         )
     };
+    let attestation_pdu = StealthBondingAttestation {
+        nonce: request.nonce,
+        unit_public,
+        unit_serial: accessory.unit_serial,
+        unit_cert: *unit_cert,
+        attestation: sign(factory_secret, &signed),
+    }
+    .encode();
+    let attestation = StealthBondingAttestation::decode(&attestation_pdu)
+        .map_err(|_| PairingError::AttestationFailed)?;
+    if !verify(
+        manufacturer,
+        &unit_cert_message(&attestation.unit_public, &attestation.unit_serial),
+        &attestation.unit_cert,
+    ) {
+        return Err(PairingError::AttestationFailed);
+    }
     let expected = attestation_message(
         host.identity,
         accessory.identity,
         offer.policy.code(),
         offer.reconnect.code(),
-        &nonce,
+        &attestation.nonce,
         &host_sc_public,
         &accessory_sc_public,
     );
-    let attestation = sign(factory_secret, &signed);
-    if signed != expected || !verify(&unit_public, &expected, &attestation) {
+    if !verify(
+        &attestation.unit_public,
+        &expected,
+        &attestation.attestation,
+    ) {
         return Err(PairingError::AttestationFailed);
     }
     if host.require_acoustic && !accessory.plays_acoustic {
         return Err(PairingError::AcousticFailed);
     }
-    host.used_attestation_nonces.push(nonce);
-    host.last_attestation_nonce = Some(nonce);
+    host.used_attestation_nonces.push(attestation.nonce);
+    host.last_attestation_nonce = Some(attestation.nonce);
 
     let vault_public = public_key(&host.vault_secret);
     let credential_id = host.credential_id.unwrap_or_else(|| host.allocate_id());
     host.credential_id = Some(credential_id);
+    let register_pdu = StealthBondingRegister {
+        credential_id: credential_id.0,
+        public_key: vault_public,
+    }
+    .encode();
+    let register =
+        StealthBondingRegister::decode(&register_pdu).map_err(|_| PairingError::ParamsRejected)?;
+    if register.credential_id != credential_id.0 || register.public_key != vault_public {
+        return Err(PairingError::ParamsRejected);
+    }
 
     let ltk = fixture_ltk(host.identity, accessory.identity);
 
@@ -837,6 +1064,9 @@ pub fn pair(
         reconnect_mode: offer.reconnect,
         params_pdu: Some(params_pdu),
         params_response_pdu: Some(params_response_pdu),
+        attestation_request_pdu: Some(attestation_request_pdu),
+        attestation_pdu: Some(attestation_pdu),
+        register_pdu: Some(register_pdu),
     })
 }
 

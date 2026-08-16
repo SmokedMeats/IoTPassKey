@@ -1,4 +1,6 @@
 /target
+sb-vault.txt
+*.vault.txt
 **/*.rs.bk
 .idea/
 .vscode/

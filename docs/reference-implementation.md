@@ -10,6 +10,7 @@ A **PDU-level simulator** is a program that pretends to be a Host and an Accesso
 
 - After Stealth Commitment, the Accessory’s advertising state is not Public Advertising (including no nameless undirected ads).
 - Registration without a valid per-unit certificate or transcript-bound attestation fails; a replayed nonce fails; an attestation that omits the Low Energy Secure Connections public keys fails.
+- Pairing records golden `0xF0`/`0xF1` Params, `0xF2` attestation request/response, and `0xF3` register bytes.
 - Assertion reconnect succeeds; a replayed challenge fails.
 - A Host that shares a vault `credential_id` reconnects without a new Enrollment Window; a stranger Host cannot.
 - A second Bond Passkey can be enrolled and both peers can reconnect.
@@ -37,7 +38,7 @@ Do not start a second repository for the simulator. Split later only if somethin
 | Firmware tree (Zephyr / nRF) | The board project is large and has its own SDK/vendor pins |
 | Certification / test-tool product | You are selling the badge in [`commercial.md`](commercial.md) |
 
-Until then: `docs/spec/` is the protocol; the simulator is a Rust crate under `sim/`; the first chip adapter is `firmware/accessory` (Zephyr 4.4, `nrf52840dk/nrf52840`).
+Until then: `docs/spec/` is the protocol; the simulator is a Rust crate under `sim/`; the file-vault test Host is `host/`; the first chip adapter is `firmware/accessory` (Zephyr 4.4, `nrf52840dk/nrf52840`).
 
 ## Language
 
@@ -50,7 +51,7 @@ Until then: `docs/spec/` is the protocol; the simulator is a Rust crate under `s
 
 Do not write the simulator in C. That language is for the chip, after the packets are stable. Python was considered for draft speed and rejected so this crate does not get rewritten.
 
-The crate is `stealth-bonding-sim` in `sim/`. Integration tests live in `sim/tests/conformance.rs` and hit the pairing-plus-advertising seam only. Per-unit factory certificates, transcript-bound attestation (including stubbed Low Energy Secure Connections public keys), and vault assertions use real P-256 signatures. Link math stays stubbed (fixture Long Term Key). CI runs `cargo fmt`, `clippy -D warnings`, and `cargo test` (not Biome).
+The crate is `stealth-bonding-sim` in `sim/`. Integration tests live in `sim/tests/conformance.rs` and hit the pairing-plus-advertising seam only. Per-unit factory certificates, transcript-bound attestation (including stubbed Low Energy Secure Connections public keys), and vault assertions use real P-256 signatures. Link math stays stubbed (fixture Long Term Key). Params, attestation, and register PDUs are fixed-length byte arrays. CI runs `cargo fmt`, `clippy -D warnings`, and `cargo test` (not Biome).
 
 ## Testing ladder
 
@@ -59,7 +60,7 @@ Pairing a Development Kit from a phone’s Settings app is **not** a Bond Passke
 | Layer | Proves |
 | --- | --- |
 | Simulator (`sim/`) | Per-unit cert, SC-transcript attestation, assertion, sync vs stranger, unique scan rows, stealth |
-| File-vault test Host (later) | Same checks on a link we control |
+| File-vault test Host (`host/`) | Same checks on a TCP link we control; private key on disk |
 | nRF52840 Development Kit + laptop | Generic Access Profile hide only |
 | Kit + test Host | First on-air attestation + assertion |
 | BlueZ, then phone OS | Real Host vault |
@@ -70,7 +71,7 @@ Full order and demand notes: [`adoption-path.md`](adoption-path.md).
 
 1. Simulator + golden PDU traces and P-256 fixtures (this repo).
 2. Firmware adapter (`firmware/accessory`) on nRF52840 DK — GAP hide only on stock Zephyr 4.4.
-3. File-vault test Host, then BlueZ, when attestation/register PDUs are stable.
+3. File-vault test Host (`host/`, binaries `sb-host` and `sb-accessory`), then BlueZ.
 4. Zephyr host patch for draft SMP opcodes, if we want those PDUs on the air.
 
 Commercial products that might sit on top of that path (modules, SDK, certified badge) are listed in [`commercial.md`](commercial.md).

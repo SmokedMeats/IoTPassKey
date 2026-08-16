@@ -1,7 +1,10 @@
 use stealth_bonding_sim::{
     pair, reconnect, Accessory, Advertising, BondPasskeyId, BondedLink, DelegatedError, Host,
-    PairingError, PairingMode, PairingOffer, ReconnectError, ReconnectMode, StealthBondingParams,
-    StealthPolicy, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE, T_SB_ENROLL_MS,
+    PairingError, PairingMode, PairingOffer, PduError, ReconnectError, ReconnectMode,
+    StealthBondingAttestation, StealthBondingAttestationRequest, StealthBondingParams,
+    StealthBondingRegister, StealthPolicy, ATTESTATION_FLAG_REQUEST, ATTESTATION_FLAG_RESPONSE,
+    ATTESTATION_LEN, ATTESTATION_OPCODE, ATTESTATION_REQUEST_LEN, PARAMS_OPCODE,
+    PARAMS_RESPONSE_OPCODE, REGISTER_LEN, REGISTER_OPCODE, T_SB_ENROLL_MS,
 };
 
 fn enroll_default(accessory: &mut Accessory, host: &mut Host) {
@@ -66,6 +69,69 @@ fn pairing_exchanges_spec_params_pdus() {
     assert_eq!(
         outcome.params_response_pdu.expect("response"),
         [0xF1, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00]
+    );
+}
+
+#[test]
+fn pairing_exchanges_spec_attestation_and_register_pdus() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    accessory.open_enrollment().expect("enrollment");
+
+    let outcome = pair(&mut host, &mut accessory, PairingOffer::default()).expect("pair");
+
+    let request = outcome
+        .attestation_request_pdu
+        .expect("attestation request");
+    let mut expected_request = [0u8; ATTESTATION_REQUEST_LEN];
+    expected_request[0] = ATTESTATION_OPCODE;
+    expected_request[1] = 0x01;
+    expected_request[2] = ATTESTATION_FLAG_REQUEST;
+    expected_request[34] = 0x01;
+    assert_eq!(request, expected_request);
+    assert_eq!(
+        StealthBondingAttestationRequest::decode(&request)
+            .expect("decode request")
+            .encode(),
+        request
+    );
+
+    let attestation = outcome.attestation_pdu.expect("attestation");
+    assert_eq!(attestation.len(), ATTESTATION_LEN);
+    assert_eq!(
+        &attestation[..3],
+        &[ATTESTATION_OPCODE, 0x01, ATTESTATION_FLAG_RESPONSE]
+    );
+    assert_eq!(&attestation[3..35], &request[3..35]);
+    let decoded = StealthBondingAttestation::decode(&attestation).expect("decode attestation");
+    assert_eq!(decoded.encode(), attestation);
+    assert_eq!(decoded.unit_serial[6], 0x00);
+    assert_eq!(decoded.unit_serial[7], 0x02);
+
+    let register = outcome.register_pdu.expect("register");
+    assert_eq!(register.len(), REGISTER_LEN);
+    assert_eq!(&register[..2], &[REGISTER_OPCODE, 0x01]);
+    let decoded_register = StealthBondingRegister::decode(&register).expect("decode register");
+    assert_eq!(decoded_register.encode(), register);
+    assert_eq!(
+        decoded_register.credential_id,
+        outcome.bond_passkey_id.expect("id").0
+    );
+}
+
+#[test]
+fn attestation_and_register_reject_wrong_length() {
+    assert_eq!(
+        StealthBondingAttestationRequest::decode(&[0xF2, 0x01, 0x00]).expect_err("short request"),
+        PduError::WrongLength
+    );
+    assert_eq!(
+        StealthBondingAttestation::decode(&[0xF2, 0x01, 0x01]).expect_err("short attestation"),
+        PduError::WrongLength
+    );
+    assert_eq!(
+        StealthBondingRegister::decode(&[0xF3, 0x01]).expect_err("short register"),
+        PduError::WrongLength
     );
 }
 

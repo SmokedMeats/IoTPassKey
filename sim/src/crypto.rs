@@ -1,6 +1,7 @@
 use p256::ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::SecretKey;
+use rand_core::{OsRng, RngCore};
 
 pub type Secret = [u8; 32];
 pub type PublicKeyBytes = [u8; 33];
@@ -105,6 +106,32 @@ pub fn assertion_message(challenge: &Nonce, accessory_identity: [u8; 6]) -> Vec<
     message.extend_from_slice(challenge);
     message.extend_from_slice(&accessory_identity);
     message
+}
+
+pub fn generate_secret() -> Secret {
+    let secret_key = SecretKey::random(&mut OsRng);
+    let bytes = secret_key.to_bytes();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    out
+}
+
+pub fn generate_nonce() -> Nonce {
+    let mut nonce = [0u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    nonce
+}
+
+pub fn generate_identity() -> [u8; 6] {
+    let mut identity = [0u8; 6];
+    OsRng.fill_bytes(&mut identity);
+    identity
+}
+
+pub fn generate_credential_id() -> [u8; 16] {
+    let mut id = [0u8; 16];
+    OsRng.fill_bytes(&mut id);
+    id
 }
 
 pub fn vault_secret_from_identity(identity: [u8; 6]) -> Secret {

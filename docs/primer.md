@@ -107,8 +107,8 @@ Our spec inserts **Phase 1b** after “shall we pair with Low Energy Secure Conn
 | --- | --- | --- |
 | `0xF0` | Stealth Bonding Params | “I want this Stealth Policy, this reconnect mode, this many bonds.” |
 | `0xF1` | Stealth Bonding Params Response | “I accept those values” (or this mode fails). |
-| `0xF2` | Attestation | Per-unit cert plus Factory Attestation Key over the LE SC transcript + Host nonce. |
-| `0xF3` | Register | Host sends `credential_id` and public key. |
+| `0xF2` | Attestation | Host request is the 35-octet nonce. Accessory response is the 204-octet per-unit cert plus signature over the LE SC transcript + nonce. |
+| `0xF3` | Register | 51-octet Host `credential_id` and vault public key. |
 
 They are **draft placeholders**, not numbers assigned by the Bluetooth Special Interest Group. A phone, laptop, or stock **BlueZ** (the usual Linux Bluetooth host stack) does not send or understand them.
 
@@ -121,9 +121,9 @@ If either side does not send or accept these PDUs, Stealth Bonding aborts. Ordin
 | Phase | What happens |
 | --- | --- |
 | 1 | Pairing Request / Response: agree on Low Energy Secure Connections and bonding |
-| 1b | Params (`0xF0`/`0xF1`) and Host nonce only. No attestation yet. |
+| 1b | Params (`0xF0`/`0xF1`), then Attestation request (`0xF2`, nonce). No factory signature yet. |
 | 2 | Public-key exchange (LE Secure Connections — link cipher) |
-| 2b | Per-unit cert + attestation (`0xF2`) over the SC transcript and nonce; silent vault create; register (`0xF3`) |
+| 2b | Attestation response (`0xF2`) over the SC transcript and nonce; silent vault create; register (`0xF3`) |
 | 3 | Key distribution (LTK, identity, optional Identity Resolving Key) |
 | 4 | **Stealth Commitment** — change advertising; only then report success |
 
@@ -248,7 +248,7 @@ Full buy list, download links, and Windows setup: [`nrf52840-dk-setup.md`](nrf52
 - Not a replacement for WebAuthn or FIDO authenticators.
 - Not a patent play. The spec is published as a defensive publication of the high-level mode. Money, if any, sits next to the protocol (modules, software development kit, certification badge, consulting). See [`commercial.md`](commercial.md).
 
-**Not next:** Zephyr SMP host patch; phone silent-vault ceremony; SIG paperwork. Next protocol proof is the simulator (attestation + assertion). The Development Kit still only proves the Generic Access Profile hide. See [`adoption-path.md`](adoption-path.md).
+**Not next:** Zephyr SMP host patch; phone silent-vault ceremony; SIG paperwork. The file-vault test Host in `host/` is the next protocol proof after the simulator (attestation + assertion on a TCP link). The Development Kit still only proves the Generic Access Profile hide. See [`adoption-path.md`](adoption-path.md).
 
 ---
 

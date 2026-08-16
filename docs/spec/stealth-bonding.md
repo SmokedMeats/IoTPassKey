@@ -362,13 +362,14 @@ sequenceDiagram
     H->>A: Connect (undirected adv during Enrollment)
     H->>A: Pairing Request (SC, bonding)
     A->>H: Pairing Response
-    H->>A: Stealth Bonding Params plus Host nonce
-    A->>H: Params Response
+    H->>A: Stealth Bonding Params (0xF0)
+    A->>H: Params Response (0xF1)
+    H->>A: Attestation request (0xF2) plus Host nonce
     Note over H,A: LE SC Phase 2 (public keys, DHKey)
-    A->>H: Per-unit cert plus attestation over SC transcript and nonce
+    A->>H: Attestation (0xF2) plus per-unit cert over SC transcript and nonce
     H->>H: Verify cert under Manufacturer Root, then attestation
     V->>V: Create Bond Passkey silently
-    H->>A: Register credential id and public key
+    H->>A: Register (0xF3) credential id and public key
     Note over H,A: LE SC Phase 3 (key distribution)
     Note over A: Stealth Commitment
     A->>A: Stop Public Advertising
@@ -402,10 +403,11 @@ I/O capability mapping is in Section 13. The user-visible association remains th
 
 After a successful pairing feature exchange that selected LE SC and bonding, and before Phase 2 public-key exchange:
 
-1. The Host SHALL send `Stealth Bonding Params` including a 32-octet random **nonce**. The Host SHALL reject a repeated nonce from a prior attempt with this Accessory (replay).
+1. The Host SHALL send `Stealth Bonding Params`. The 8-octet body does not carry the nonce.
 2. The Accessory SHALL reply with `Stealth Bonding Params Response` only. It MUST NOT attest yet. The Low Energy Secure Connections public keys do not exist until Phase 2.
+3. The Host SHALL then send `Stealth Bonding Attestation` with flags=`request`, containing a 32-octet random **nonce**. The Host SHALL reject a repeated nonce from a prior attempt with this Accessory (replay).
 
-If either side does not send or accept Params, Stealth Bonding SHALL be aborted.
+If either side does not send or accept Params or the nonce request, Stealth Bonding SHALL be aborted.
 
 #### 9.3.1 `Stealth Bonding Params` (SMP command, draft opcode `0xF0`)
 
@@ -419,7 +421,7 @@ If either side does not send or accept Params, Stealth Bonding SHALL be aborted.
 | 5 | 1 | max_bonds | Sender’s Bond Table capacity (1–255) |
 | 6 | 2 | reserved | MUST be 0 |
 
-Nonce, attestation, and registration SHALL be sent as additional draft SMP commands (`0xF2` Attestation, `0xF3` Register). The 8-octet Params body is unchanged so existing draft traces stay valid. The normative requirement is the signed bytes, the order in this section, and the verify/register steps, not a final opcode assignment.
+Nonce, attestation, and registration SHALL be sent as additional draft SMP commands (`0xF2` Attestation request/response, `0xF3` Register). The 8-octet Params body is unchanged so existing draft traces stay valid. Layouts are in Sections 9.3.3, 9.5.2, and 9.5.3.
 
 #### 9.3.2 `Stealth Bonding Params Response` (draft opcode `0xF1`)
 
@@ -428,6 +430,17 @@ Same layout. `stealth_policy` and `reconnect_mode` are the values the responder 
 `max_bonds` is the responder’s capacity. It is informational.
 
 Reserved bits MUST be ignored on receipt and MUST be zero on send.
+
+#### 9.3.3 `Stealth Bonding Attestation` request (draft opcode `0xF2`, Host → Accessory)
+
+| Offset | Size | Field | Description |
+| --- | --- | --- | --- |
+| 0 | 1 | opcode | `0xF2` |
+| 1 | 1 | version | `0x01` |
+| 2 | 1 | flags | `0x00` = request (nonce only) |
+| 3 | 32 | nonce | Host-chosen; MUST be rejected if repeated |
+
+Length is 35 octets.
 
 ### 9.4 Phase 2 — LE Secure Connections
 
@@ -454,6 +467,32 @@ Each Accessory unit MUST have its own Factory Attestation Key and a certificate 
 A stolen unit key enrolls only that unit’s identity. A stolen Manufacturer Root is a brand-wide incident; products MUST be able to revoke or rotate roots on the Host.
 
 The certificate serial is also the source of the Enrollment scan-row suffix (Section 9.11).
+
+#### 9.5.2 `Stealth Bonding Attestation` response (draft opcode `0xF2`, Accessory → Host)
+
+| Offset | Size | Field | Description |
+| --- | --- | --- | --- |
+| 0 | 1 | opcode | `0xF2` |
+| 1 | 1 | version | `0x01` |
+| 2 | 1 | flags | `0x01` = response |
+| 3 | 32 | nonce | Echo of the Host nonce |
+| 35 | 33 | unit_public | SEC1 compressed P-256 public key |
+| 68 | 8 | unit_serial | Unique per-unit serial |
+| 76 | 64 | unit_cert | ECDSA P-256 signature by the Manufacturer Root over `unit_public \|\| unit_serial` |
+| 140 | 64 | attestation | ECDSA P-256 signature by the unit key over the transcript in Section 9.5 |
+
+Length is 204 octets. A Host MUST reject any other length or flag.
+
+#### 9.5.3 `Stealth Bonding Register` (draft opcode `0xF3`, Host → Accessory)
+
+| Offset | Size | Field | Description |
+| --- | --- | --- | --- |
+| 0 | 1 | opcode | `0xF3` |
+| 1 | 1 | version | `0x01` |
+| 2 | 16 | credential_id | Bond Passkey identifier |
+| 18 | 33 | public_key | SEC1 compressed P-256 Host-vault public key |
+
+Length is 51 octets.
 
 ### 9.6 Phase 3 — key distribution
 
@@ -561,8 +600,8 @@ After Stealth Bonding, a bonded Host reconnects without Public Advertising.
 1. Host uses the stored identity / IRK to initiate (Directed Knock).
 2. Accessory, if in `BondedKnock`, is performing Directed Knock.
 3. Accessory, if in `BondedSilent`, is not connectable until a wake gesture; then it enters `BondedKnock` for `T_SB_KNOCK`.
-4. The Accessory SHALL send a fresh 32-octet **challenge**. It MUST reject a repeated challenge (replay).
-5. The Host SHALL **assert**: sign the challenge (and Accessory identity) with the Bond Passkey private key, silently. No passkey sheet.
+4. The Accessory SHALL send a fresh 32-octet **challenge** as `Stealth Bonding Challenge` (draft opcode `0xF4`: opcode, version, challenge). It MUST reject a repeated challenge (replay).
+5. The Host SHALL **assert**: sign the challenge (and Accessory identity) with the Bond Passkey private key, silently, and send `Stealth Bonding Assertion` (draft opcode `0xF5`: opcode, version, `credential_id`, 64-octet signature). No passkey sheet.
 6. The Accessory SHALL verify the assertion against a non-revoked stored public key. Lookup is by public key / `credential_id`, not only by Host address. A synced Host with the same `credential_id` SHALL succeed without a new Enrollment Window. A stranger Host SHALL fail (`NoBond`) unless an Enrollment Window is open.
 7. On success, encryption SHALL be started with the stored LTK. If assertion or encryption fails, the Accessory SHALL disconnect and MUST NOT open Public Advertising.
 
@@ -753,8 +792,10 @@ These values are provisional for independent implementations of this draft. They
 | `SB_SERVICE_UUID` | `8b2e5c10-4f3a-4a91-9c6d-1e7a0b2d4f50` | Feature discovery and Management Service (random 128-bit; not a SIG 16-bit alias) |
 | SMP opcode Params | `0xF0` | Vendor/draft command space |
 | SMP opcode Params Response | `0xF1` | Vendor/draft command space |
-| SMP opcode Attestation | `0xF2` | Per-unit cert plus signature over LE SC transcript + nonce |
-| SMP opcode Register | `0xF3` | Host `credential_id` + public key |
+| SMP opcode Attestation | `0xF2` | Request: 35-octet nonce. Response: 204-octet per-unit cert plus signature |
+| SMP opcode Register | `0xF3` | 51-octet Host `credential_id` + public key |
+| SMP opcode Challenge | `0xF4` | 34-octet Accessory reconnect challenge |
+| SMP opcode Assertion | `0xF5` | 82-octet Host reconnect assertion |
 | Company identifier | Unassigned | Not required for this draft |
 
 Independent implementations SHOULD be prepared to configure UUIDs and opcodes.

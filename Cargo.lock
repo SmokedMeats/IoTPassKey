@@ -275,10 +275,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "stealth-bonding-host"
+version = "0.1.0"
+dependencies = [
+ "stealth-bonding-sim",
+]
+
+[[package]]
 name = "stealth-bonding-sim"
 version = "0.1.0"
 dependencies = [
  "p256",
+ "rand_core",
 ]
 
 [[package]]

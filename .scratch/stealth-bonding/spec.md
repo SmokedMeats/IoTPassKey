@@ -82,11 +82,12 @@ This repo’s job is the open specification plus, later, a reference implementat
 - The state machine’s interface is: start enrollment, accept/reject a peer, apply commitment, reconnect, revoke, reset. Callers do not set raw advertising PDUs.
 - Link crypto is LE Secure Connections. The Bond Passkey is a Host-vault P-256 credential (ADR 0006). This repo does not invent a new link cipher or use TOTP.
 - Factory attestation and reconnect assertions are real signatures in the simulator, not “always ok” stubs. Attestation covers stubbed LE SC public keys. Each Accessory fixture has its own unit key and a cert under a manufacturer root.
+- `0xF2` (35-octet nonce request / 204-octet attestation) and `0xF3` (51-octet register) are encoded and decoded on the pairing seam. The Long Term Key remains a fixture.
 - Default Stealth Policy is PeripheralOnly. Default reconnect mode is DirectedKnock.
 - Accessories expose at least two Bond Table slots; eight is recommended; no silent eviction.
 - GATT Management Service is post-bond only and optional for a first reference implementation.
 - Draft UUID `8b2e5c10-4f3a-4a91-9c6d-1e7a0b2d4f50` and SMP opcodes `0xF0`–`0xF3` are placeholders.
-- First reference implementation: a Rust PDU simulator in this repo (`sim/`) that speaks the state machine and records PDUs. Firmware C on a real controller is a later adapter behind the same interface.
+- First reference implementation: a Rust PDU simulator in this repo (`sim/`) that speaks the state machine and records PDUs. The file-vault test Host is `host/` (`sb-host` / `sb-accessory`). Firmware C on a real controller is a later adapter behind the same interface.
 - Rollout path is spec → simulator → firmware/OS. Not an installable app.
 
 ## Testing Decisions

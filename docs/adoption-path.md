@@ -27,8 +27,8 @@ There is no iPhone or Android silent-vault ceremony to point at. Test in layers.
 
 | Layer | Setup | Proves | Does not prove |
 | --- | --- | --- | --- |
-| **0. Simulator** | In-process Host + Accessory in `sim/`. Real P-256 sign/verify fixtures (manufacturer root, per-unit cert, vault key). | Attestation required and must cover stubbed SC public keys; forged unit cert fails; replayed nonce fails; assertion reconnect; synced Host (same credential id) skips Enrollment Window; stranger cannot; same Local Name still yields unique scan rows; scan-list / commitment tests still pass. | Radio, a real operating-system vault, a real microphone acoustic check. |
-| **1. File-vault test Host** | Small Linux or Rust Host. Key pair on disk. No WebAuthn dialog. Talks to a second process or a board. | PDUs on a link we control. Accessory rejects bad attestation. Host assertion is checked. | iCloud / Google / Windows silent pair. |
+| **0. Simulator** | In-process Host + Accessory in `sim/`. Real P-256 sign/verify fixtures (manufacturer root, per-unit cert, vault key). Golden `0xF0`–`0xF3` bytes. | Attestation required and must cover stubbed SC public keys; forged unit cert fails; replayed nonce fails; assertion reconnect; synced Host (same credential id) skips Enrollment Window; stranger cannot; same Local Name still yields unique scan rows; scan-list / commitment tests still pass. | Radio, a real operating-system vault, a real microphone acoustic check, real LE SC link math. |
+| **1. File-vault test Host** | Rust crate `host/`. Key pair in `SBVAULT1` on disk. No WebAuthn dialog. Talks TCP to `sb-accessory` (simulator Accessory). | PDUs on a link we control. Host rejects an untrusted manufacturer root. Stranger vault cannot reconnect. | iCloud / Google / Windows silent pair. Radio. |
 | **2. Development Kit hide** | Current Zephyr app + a normal laptop. See [`nrf52840-dk-setup.md`](nrf52840-dk-setup.md). | Scan list empties. Filmable. Label it “Generic Access Profile hide only.” | The Bond Passkey. |
 | **3. Kit + test Host** | nRF Accessory with a **test** per-unit cert under a test manufacturer root; Linux file vault. Optional second kit as central. | First on-air attestation + assertion. | Platform vault sync. |
 | **4. BlueZ** | Host stack once PDUs are stable. | A real Host shape. | Consumer phone vault. |
@@ -95,7 +95,7 @@ Optimize for a **correct oracle**, then a **hide video**, then a **test Host** t
 | --- | --- | --- |
 | **A** | Simulator: per-unit cert, SC-transcript attestation, assertion, sync vs stranger, unique scan rows, stealth. | Tests only pass by stubbing “always ok.” |
 | **B** | nRF hide demo. Film: laptop pairs, second phone list empty. | Hide fails on a real scan list. |
-| **C** | File-vault test Host + Accessory (process or kit). | We cannot check an assertion without a phone OS (then the design is stuck). |
+| **C** | File-vault test Host + Accessory process (`sb-host` / `sb-accessory`). | We cannot check an assertion without inventing a passkey sheet (then the design is stuck). |
 | **D** | BlueZ or userspace Host with that vault. | Maintainers refuse unknown opcodes or a vault hook. |
 | **E** | Zephyr Accessory sample (test per-unit cert, verify assertions, hide). | — |
 | **F** | One room OEM for hide. Mention passkey only with a Linux/test Host. | They only wanted hide. |

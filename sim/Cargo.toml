@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
