@@ -2,6 +2,8 @@
 
 The protocol is open. Money, if any, sits next to it — not inside the pairing mode.
 
+Who is likely to adopt, whether the Bond Passkey does any work once hide-after-pair already exists, and the development order: [`adoption-path.md`](adoption-path.md).
+
 This is not normative. It does not change [`stealth-bonding.md`](spec/stealth-bonding.md).
 
 ## What does not sell

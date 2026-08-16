@@ -9,6 +9,9 @@ A **PDU** (protocol data unit) is one on-the-wire message: Pairing Request, Stea
 A **PDU-level simulator** is a program that pretends to be a Host and an Accessory and exchanges those messages according to the spec. There is no Bluetooth radio. Two objects in process (or two processes) send structured PDUs to each other. A test harness asserts the outcomes the spec cares about:
 
 - After Stealth Commitment, the Accessory’s advertising state is not Public Advertising (including no nameless undirected ads).
+- Registration without valid factory attestation fails; a replayed nonce fails.
+- Assertion reconnect succeeds; a replayed challenge fails.
+- A Host that shares a vault `credential_id` reconnects without a new Enrollment Window; a stranger Host cannot.
 - A second Bond Passkey can be enrolled and both peers can reconnect.
 - If commitment cannot hide the Accessory, pairing fails and the Bond Table stays empty.
 - An unbonded peer cannot open Delegated Enrollment.
@@ -47,13 +50,27 @@ Until then: `docs/spec/` is the protocol; the simulator is a Rust crate under `s
 
 Do not write the simulator in C. That language is for the chip, after the packets are stable. Python was considered for draft speed and rejected so this crate does not get rewritten.
 
-The crate is `stealth-bonding-sim` in `sim/`. Integration tests live in `sim/tests/conformance.rs` and hit the pairing-plus-advertising seam only. No Bluetooth stack crate — PDUs are ordinary bytes. CI runs `cargo fmt`, `clippy -D warnings`, and `cargo test` (not Biome).
+The crate is `stealth-bonding-sim` in `sim/`. Integration tests live in `sim/tests/conformance.rs` and hit the pairing-plus-advertising seam only. Factory attestation and vault assertions use real P-256 signatures. Low Energy Secure Connections link math stays stubbed (fixture Long Term Key). CI runs `cargo fmt`, `clippy -D warnings`, and `cargo test` (not Biome).
+
+## Testing ladder
+
+Pairing a Development Kit from a phone’s Settings app is **not** a Bond Passkey test. Layers:
+
+| Layer | Proves |
+| --- | --- |
+| Simulator (`sim/`) | Attestation, assertion, sync vs stranger, stealth |
+| File-vault test Host (later) | Same checks on a link we control |
+| nRF52840 Development Kit + laptop | Generic Access Profile hide only |
+| Kit + test Host | First on-air attestation + assertion |
+| BlueZ, then phone OS | Real Host vault |
+
+Full order and demand notes: [`adoption-path.md`](adoption-path.md).
 
 ## Suggested order
 
-1. Simulator + golden PDU traces (this repo) — done.
-2. Firmware adapter (`firmware/accessory`) on nRF52840 DK — GAP half on stock Zephyr 4.4.
-3. Host-stack adapter (BlueZ / Android / etc.) when the on-air format is stable.
-4. Zephyr host patch for draft SMP Params, if we want those PDUs on the air.
+1. Simulator + golden PDU traces and P-256 fixtures (this repo).
+2. Firmware adapter (`firmware/accessory`) on nRF52840 DK — GAP hide only on stock Zephyr 4.4.
+3. File-vault test Host, then BlueZ, when attestation/register PDUs are stable.
+4. Zephyr host patch for draft SMP opcodes, if we want those PDUs on the air.
 
 Commercial products that might sit on top of that path (modules, SDK, certified badge) are listed in [`commercial.md`](commercial.md).

@@ -1,10 +1,12 @@
 //! Stealth Bonding PDU simulator.
 //!
 //! Public seam: pairing, advertising visibility, and the Bond Table.
-//! LE Secure Connections crypto is stubbed; Params PDUs are real bytes.
+//! Factory attestation and vault assertions are real P-256 signatures.
+//! Low Energy Secure Connections link math is stubbed; Params PDUs are real bytes.
 
 #![forbid(unsafe_code)]
 
+mod crypto;
 mod model;
 mod pdu;
 

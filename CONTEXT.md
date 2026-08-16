@@ -2,18 +2,32 @@
 
 Domain language for a Bluetooth pairing-mode extension: per-peer credentials plus mandatory post-bond stealth. This file is a glossary, not a spec.
 
+Plain-language training notes, including Bluetooth and tooling terms: [`docs/primer.md`](docs/primer.md).
+
 ## Language
 
 **Stealth Bonding**:
-The pairing mode specified by this project: LE Secure Connections bonding plus a required advertising-state change so the Accessory is no longer publicly discoverable.
+The pairing mode specified by this project: an attested Host-vault Bond Passkey, Low Energy Secure Connections for the radio link, and a required advertising-state change so the Accessory is no longer publicly discoverable.
 _Avoid_: Stealthkeys, Private Secure Connections, passkey pairing, hide-after-pair
 
 **Bond Passkey**:
-The named, revocable credential created for one peer when Stealth Bonding succeeds. It is a stored bond plus policy, not a typed PIN and not a WebAuthn passkey.
-_Avoid_: passkey (unqualified), PIN, password, account key
+A discoverable public-key credential created when Stealth Bonding succeeds. The Host platform vault holds the private key. The Accessory stores the public key. It is not a typed PIN, not Bluetooth Passkey Entry, and not a labeled Long Term Key. The user does not see or click it during pair.
+_Avoid_: passkey (unqualified), PIN, password, account key, labeled LTK
+
+**Host Vault**:
+The Host operating-system store for Bond Passkey private keys (the same class of store as platform WebAuthn passkeys). Create and assert are silent inside the Bluetooth stack. A “use passkey?” sheet is non-conformant.
+_Avoid_: password manager UI, authenticator app, Authy
+
+**Factory Attestation Key**:
+A stable asymmetric key burned into the Accessory at manufacture. It signs the pairing transcript plus a Host nonce so the Host can verify “genuine device of this model.” It does not rotate. It does not prove “the speaker in your hand” versus a same-model clone with a stolen factory key.
+_Avoid_: TOTP seed, pairing PIN, Authy secret
+
+**Assertion**:
+A signature over a fresh challenge proving the Host still holds the Bond Passkey private key. Proofs rotate; the root credential does not.
+_Avoid_: one-time password, rotating digits, TOTP
 
 **Bond Table**:
-The Accessory’s (and Host’s) store of Bond Passkeys.
+The Accessory’s store of Bond Passkey public keys and policy. The Host Vault is the Host’s store of private keys. These are not the Filter Accept List.
 _Avoid_: paired-device list, allowlist (the Filter Accept List is a Link Layer mechanism, not this store)
 
 **Stealth Policy**:
@@ -25,11 +39,11 @@ The required GAP/Link Layer transition that runs after keys are stored and befor
 _Avoid_: hide step, stealth toggle
 
 **Enrollment Window**:
-A time-bounded Limited Discoverable period used to add a Bond Passkey. Opened by the existing pairing gesture or by Delegated Enrollment.
+A time-bounded Limited Discoverable period used to add a Bond Passkey. Opened by the existing pairing gesture or by Delegated Enrollment. A Host that already holds a synced vault credential for this Accessory does not need a new window.
 _Avoid_: pairing mode (unqualified; Bluetooth already uses that phrase), discoverable mode (too broad)
 
 **Delegated Enrollment**:
-Opening an Enrollment Window from an already-bonded Host so a screenless Accessory can add another Bond Passkey without a new hardware control.
+Opening an Enrollment Window from an already-bonded Host so a screenless Accessory can add another Bond Passkey (a Host that does not already hold that credential) without a new hardware control.
 _Avoid_: remote pairing, admin pairing
 
 **Public Advertising**:
@@ -41,9 +55,9 @@ Connectable directed advertising to a bonded peer’s identity, with no Local Na
 _Avoid_: ping, private advertising (LE Privacy is a different feature)
 
 **Accessory**:
-The typically screenless peripheral (speaker, buds, keyboard, IoT gadget) that holds Bond Passkeys and applies stealth.
+The typically screenless peripheral (speaker, buds, keyboard, IoT gadget) that stores Bond Passkey public keys and applies stealth. It is the relying party.
 _Avoid_: device (unqualified), gadget, provider
 
 **Host**:
-The typically screened central (phone, laptop, tablet) that initiates pairing, shows UI, and may authorize Delegated Enrollment.
+The typically screened central (phone, laptop, tablet) that holds the Bond Passkey private key, initiates pairing, and may authorize Delegated Enrollment. It is the authenticator.
 _Avoid_: phone, computer, seeker, client (unqualified)

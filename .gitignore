@@ -2,6 +2,7 @@
 **/*.rs.bk
 .idea/
 .vscode/
+.venv/
 
 # West / Zephyr workspace (created by `west init -l firmware`)
 .west/

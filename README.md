@@ -6,12 +6,16 @@ This is a protocol (SMP + GAP), not an app. Devices get it from firmware and OS 
 
 ## Read this first
 
+- [Primer (training notes)](docs/primer.md) — start here; every term defined
 - [Stealth Bonding Protocol Specification](docs/spec/stealth-bonding.md) — normative
 - [Domain glossary](CONTEXT.md)
 - [Why SMP/GAP, not GATT](docs/adr/0001-protocol-extension-not-profile.md)
 - [Why LE Secure Connections](docs/adr/0002-reuse-le-secure-connections.md)
+- [Why the Bond Passkey is a Host-vault credential](docs/adr/0006-host-vault-passkey.md)
 - [Why stronger than LE Privacy](docs/adr/0003-no-public-advertising-after-bond.md)
 - [Reference implementation / PDU-level simulator](docs/reference-implementation.md)
+- [nRF52840 DK buy list and setup](docs/nrf52840-dk-setup.md)
+- [Adoption path and demand](docs/adoption-path.md)
 - [What you can sell](docs/commercial.md)
 
 ## Defaults
@@ -22,11 +26,11 @@ This is a protocol (SMP + GAP), not an app. Devices get it from firmware and OS 
 | Reconnect | Directed Knock |
 | First-pair UX | Existing pairing button; Host is the screen |
 | Extra Hosts | Another button hold, or Delegated Enrollment |
-| Crypto | LE Secure Connections (not a new cipher) |
+| Crypto | Host-vault Bond Passkey + factory attestation; LE Secure Connections is the link cipher |
 
 ## Firmware
 
-Zephyr 4.4 Accessory app in [`firmware/`](firmware/). See [`firmware/README.md`](firmware/README.md). Custom SMP opcodes are not in this tree; the app does Enrollment, LE SC, and Stealth Commitment at GAP.
+Zephyr 4.4 Accessory app in [`firmware/`](firmware/). See [`firmware/README.md`](firmware/README.md). Buy list, downloads, and flash steps: [`docs/nrf52840-dk-setup.md`](docs/nrf52840-dk-setup.md). Custom SMP opcodes are not in this tree; the app does Enrollment, LE SC, and Stealth Commitment at GAP.
 
 ## Simulator
 

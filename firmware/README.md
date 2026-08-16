@@ -4,6 +4,8 @@ Zephyr 4.4 workspace app. Implements the GAP half of Stealth Bonding on stock Ze
 
 Default board: `nrf52840dk/nrf52840`.
 
+Buy list, Windows downloads, flash, and on-air demo: [`docs/nrf52840-dk-setup.md`](../docs/nrf52840-dk-setup.md).
+
 ## One-time setup
 
 From the git root (requires [west](https://docs.zephyrproject.org/latest/develop/west/index.html) and the [Zephyr SDK](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)):

@@ -312,6 +312,86 @@ fn delegated_confirm_is_required_before_a_later_bond_passkey() {
 }
 
 #[test]
+fn registration_fails_without_attestation() {
+    let mut accessory = Accessory::without_factory_attestation();
+    let mut host = Host::new();
+    accessory.open_enrollment().expect("enrollment");
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("attest");
+    assert_eq!(error, PairingError::AttestationFailed);
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
+fn registration_fails_when_host_cannot_verify_attestation() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::that_cannot_verify_attestation();
+    accessory.open_enrollment().expect("enrollment");
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("verify");
+    assert_eq!(error, PairingError::AttestationFailed);
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
+fn registration_fails_on_replayed_attestation_nonce() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    enroll_default(&mut accessory, &mut host);
+    accessory.revoke(accessory.bond_ids()[0]);
+    accessory.open_enrollment().expect("again");
+    host.replay_next_attestation_nonce();
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("replay");
+    assert_eq!(error, PairingError::AttestationReplay);
+}
+
+#[test]
+fn assertion_reconnect_succeeds() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    enroll_default(&mut accessory, &mut host);
+
+    let link = reconnect(&host, &mut accessory).expect("assert");
+    assert!(link.bond_passkey_id.is_some());
+}
+
+#[test]
+fn replayed_assertion_challenge_fails() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    enroll_default(&mut accessory, &mut host);
+    reconnect(&host, &mut accessory).expect("first");
+    accessory.replay_next_assertion_challenge();
+
+    let error = reconnect(&host, &mut accessory).expect_err("replay");
+    assert_eq!(error, ReconnectError::AssertionReplay);
+    assert!(!accessory.appears_on_public_scan_list());
+}
+
+#[test]
+fn synced_host_same_cred_skips_enrollment() {
+    let mut accessory = Accessory::new();
+    let mut laptop = Host::new();
+    enroll_default(&mut accessory, &mut laptop);
+
+    let phone = Host::sharing_vault_with(&laptop, [0x44, 0, 0, 0, 0, 0x04]);
+    reconnect(&phone, &mut accessory).expect("synced vault");
+    assert_eq!(accessory.bond_ids().len(), 1);
+}
+
+#[test]
+fn stranger_host_needs_enrollment() {
+    let mut accessory = Accessory::new();
+    let mut laptop = Host::new();
+    let stranger = Host::with_identity([0x99, 0, 0, 0, 0, 0x09]);
+    enroll_default(&mut accessory, &mut laptop);
+
+    let error = reconnect(&stranger, &mut accessory).expect_err("stranger");
+    assert_eq!(error, ReconnectError::NoBond);
+}
+
+#[test]
 fn delegated_confirm_timeout_discards_the_new_pair() {
     let mut accessory = Accessory::new();
     let mut laptop = Host::new();

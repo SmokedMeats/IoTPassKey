@@ -16,7 +16,7 @@ The user cannot install an app to fix this on arbitrary radios. The behavior has
 
 Treat Stealth Bonding as a Core Spec pairing-mode extension (SMP + GAP), not a GATT profile and not an app.
 
-Devices that both support it negotiate the mode, pair with LE Secure Connections, store a Bond Passkey, then apply Stealth Commitment: the Accessory leaves Public Advertising. Default Stealth Policy is PeripheralOnly (speaker hidden, laptop still shown). The Accessory can hold multiple Bond Passkeys. New ones are added with the existing pairing-button Enrollment Window, or Delegated Enrollment from an already-bonded Host. Reconnect uses Directed Knock, not undirected ads. If commitment cannot stop Public Advertising, pairing fails and keys are discarded.
+Devices that both support it negotiate the mode, verify factory attestation, create a Bond Passkey in the Host vault (Accessory stores the public key), encrypt the link with LE Secure Connections, then apply Stealth Commitment. Default Stealth Policy is PeripheralOnly. The user does not see a passkey sheet. A synced Host reuses `credential_id` without a new Enrollment Window. Strangers enroll with the pairing button or Delegated Enrollment. Reconnect is an Assertion over a fresh challenge, then Directed Knock. If commitment cannot stop Public Advertising, pairing fails and keys are discarded.
 
 This repo’s job is the open specification plus, later, a reference implementation and conformance tests. Rollout to real products is firmware and OS updates.
 
@@ -29,7 +29,7 @@ This repo’s job is the open specification plus, later, a reference implementat
 5. As a speaker owner, I want the laptop to be the screen, so that a button-only speaker can still complete pairing.
 6. As a speaker owner, I want to add a phone later with the same button hold, so that two Hosts can both be trusted.
 7. As a speaker owner, I want to add a tablet from the already-paired laptop, so that I do not have to walk over and hold the speaker button.
-8. As a speaker owner, I want each Host to have its own Bond Passkey, so that forgetting the laptop does not kick the phone off.
+8. As a speaker owner, I want a friend’s phone to get its own Bond Passkey, so that forgetting the laptop does not kick that friend off. My second laptop on the same vault should just work.
 9. As a speaker owner, I want factory reset to wipe every Bond Passkey, so that a sold or lost speaker is not still trusted.
 10. As a speaker owner, I want a full Bond Table to refuse a new pair instead of silently dropping an old one, so that I do not lose a device I still use.
 11. As a Host user, I want to name a Bond Passkey (“Kitchen speaker → Jacob’s laptop”), so that I can revoke the right one later.
@@ -53,7 +53,7 @@ This repo’s job is the open specification plus, later, a reference implementat
 29. As a chip firmware engineer, I want the feature in SMP and GAP, so that a GATT app cannot pretend to own bonding.
 30. As a Host OS engineer, I want a GATT management service only after a bond exists, so that list/revoke/open-enrollment have a standard surface.
 31. As a Host OS engineer, I want Bond Table List to omit LTK and IRK, so that a debug screen cannot leak keys.
-32. As a security reviewer, I want the Enrollment Window time-bounded, so that the Just Works MITM window is short.
+32. As a security reviewer, I want factory attestation over a fresh nonce, so that Just Works is not the trust root.
 33. As a security reviewer, I want Delegated Enrollment to require an existing encrypted Bond Passkey, so that strangers cannot open pairing.
 34. As a security reviewer, I want an optional confirm-on-authorizing-Host for additional enrollments, so that a stolen session cannot quietly add a peer.
 35. As a product designer, I want no new buttons, screens, or LEDs required, so that existing SKUs can take a firmware update.
@@ -77,11 +77,12 @@ This repo’s job is the open specification plus, later, a reference implementat
 - Language is the `CONTEXT.md` glossary. Do not say “passkey” without “Bond,” and do not call Public Advertising a “blip” in normative text.
 - Module to build later: a Stealth Bonding state machine that owns Enrollment, pairing params, Bond Table, and advertising-state commands. That is the only external seam.
 - The state machine’s interface is: start enrollment, accept/reject a peer, apply commitment, reconnect, revoke, reset. Callers do not set raw advertising PDUs.
-- Crypto is LE Secure Connections as specified by Bluetooth. This repo does not invent DH or a new cipher.
+- Link crypto is LE Secure Connections. The Bond Passkey is a Host-vault P-256 credential (ADR 0006). This repo does not invent a new link cipher or use TOTP.
+- Factory attestation and reconnect assertions are real signatures in the simulator, not “always ok” stubs.
 - Default Stealth Policy is PeripheralOnly. Default reconnect mode is DirectedKnock.
 - Accessories expose at least two Bond Table slots; eight is recommended; no silent eviction.
 - GATT Management Service is post-bond only and optional for a first reference implementation.
-- Draft UUID `8b2e5c10-4f3a-4a91-9c6d-1e7a0b2d4f50` and SMP opcodes `0xF0` / `0xF1` are placeholders.
+- Draft UUID `8b2e5c10-4f3a-4a91-9c6d-1e7a0b2d4f50` and SMP opcodes `0xF0`–`0xF3` are placeholders.
 - First reference implementation: a Rust PDU simulator in this repo (`sim/`) that speaks the state machine and records PDUs. Firmware C on a real controller is a later adapter behind the same interface.
 - Rollout path is spec → simulator → firmware/OS. Not an installable app.
 
@@ -99,6 +100,12 @@ The module under test is the Stealth Bonding state machine. Prior art in this re
 - Delegated Enrollment from unbonded peer → rejected.
 - Full Bond Table → new pair refused.
 - Factory reset → Unprovisioned and Public Advertising allowed again.
+- Registration without factory attestation → fail; no Bond Passkey.
+- Replayed attestation nonce → fail.
+- Assertion reconnect → success.
+- Replayed assertion challenge → fail; still not public.
+- Synced Host (same `credential_id`) reconnects without a new Enrollment Window.
+- Stranger Host → no bond; needs enrollment.
 
 Golden PDU traces and a “would this appear on a public scan list?” oracle are the preferred fixtures.
 
@@ -116,7 +123,7 @@ Golden PDU traces and a “would this appear on a public scan list?” oracle ar
 
 Seam check (from `/to-spec`): there is no existing codebase seam. The highest seam to add is the pairing-plus-advertising state machine. GATT, HCI, and UI are adapters behind it.
 
-Related ADRs: `0001` protocol extension, `0002` reuse LE SC, `0003` no Public Advertising after bond.
+Related ADRs: `0001` protocol extension, `0002` reuse LE SC for the link, `0003` no Public Advertising after bond, `0006` Host-vault Bond Passkey.
 
 What a PDU-level simulator is, and the implementation order: [`docs/reference-implementation.md`](../../docs/reference-implementation.md).
 

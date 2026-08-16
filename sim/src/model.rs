@@ -1,3 +1,7 @@
+use crate::crypto::{
+    assertion_message, attestation_message, public_key, sign, vault_secret_from_identity, verify,
+    Nonce, PublicKeyBytes, Secret, DEFAULT_FACTORY_SECRET,
+};
 use crate::pdu::{StealthBondingParams, PARAMS_LEN, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE};
 
 pub const T_SB_ENROLL_MS: u32 = 30_000;
@@ -113,6 +117,8 @@ pub enum PairingError {
     CommitmentFailed,
     ParamsRejected,
     DelegatedConfirmRequired,
+    AttestationFailed,
+    AttestationReplay,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +135,8 @@ pub enum ReconnectError {
     NoBond,
     NotConnectable,
     EncryptionFailed,
+    AssertionFailed,
+    AssertionReplay,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,12 +171,16 @@ enum GapState {
     PublicBonded,
 }
 
+#[derive(Clone)]
 struct StoredBond {
     id: BondPasskeyId,
+    /// Peer identity for Directed Knock. Reconnect looks up by public key.
+    #[allow(dead_code)]
     peer_identity: [u8; 6],
     ltk: [u8; 16],
     policy: StealthPolicy,
     reconnect: ReconnectMode,
+    public_key: PublicKeyBytes,
 }
 
 struct OrdinaryBond {
@@ -186,11 +198,15 @@ pub struct Accessory {
     advertising: Advertising,
     bonds: Vec<StoredBond>,
     ordinary_bonds: Vec<OrdinaryBond>,
-    next_id: u32,
     require_delegated_confirm: bool,
     enrollment_remaining_ms: Option<u32>,
     pending_authorizer: Option<BondPasskeyId>,
     delegated_confirmed: bool,
+    factory_secret: Option<Secret>,
+    used_assertion_challenges: Vec<Nonce>,
+    next_challenge: u32,
+    replay_assertion_challenge: bool,
+    last_assertion_challenge: Option<Nonce>,
 }
 
 pub struct Host {
@@ -203,6 +219,13 @@ pub struct Host {
     ordinary_bonds: Vec<OrdinaryBond>,
     next_id: u32,
     ltk_override: Option<[u8; 16]>,
+    vault_secret: Secret,
+    credential_id: Option<BondPasskeyId>,
+    trusted_factory_public: Option<PublicKeyBytes>,
+    used_attestation_nonces: Vec<Nonce>,
+    next_nonce: u32,
+    replay_attestation_nonce: bool,
+    last_attestation_nonce: Option<Nonce>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,11 +252,15 @@ impl Accessory {
             },
             bonds: Vec::new(),
             ordinary_bonds: Vec::new(),
-            next_id: 1,
             require_delegated_confirm: false,
             enrollment_remaining_ms: None,
             pending_authorizer: None,
             delegated_confirmed: false,
+            factory_secret: Some(DEFAULT_FACTORY_SECRET),
+            used_assertion_challenges: Vec::new(),
+            next_challenge: 1,
+            replay_assertion_challenge: false,
+            last_assertion_challenge: None,
         }
     }
 
@@ -253,6 +280,16 @@ impl Accessory {
         let mut accessory = Self::new();
         accessory.supports_le_sc = false;
         accessory
+    }
+
+    pub fn without_factory_attestation() -> Self {
+        let mut accessory = Self::new();
+        accessory.factory_secret = None;
+        accessory
+    }
+
+    pub fn replay_next_assertion_challenge(&mut self) {
+        self.replay_assertion_challenge = true;
     }
 
     pub fn open_enrollment(&mut self) -> Result<(), PairingError> {
@@ -337,6 +374,8 @@ impl Accessory {
         self.pending_authorizer = None;
         self.delegated_confirmed = false;
         self.enrollment_remaining_ms = None;
+        self.used_assertion_challenges.clear();
+        self.last_assertion_challenge = None;
         self.state = GapState::Unprovisioned;
         self.advertising = Advertising::Undirected {
             local_name: Some("Accessory".into()),
@@ -399,12 +438,6 @@ impl Accessory {
         self.delegated_confirmed = false;
     }
 
-    fn allocate_id(&mut self) -> BondPasskeyId {
-        let id = bond_id_from_counter(self.next_id);
-        self.next_id += 1;
-        id
-    }
-
     fn enter_bonded_reconnect(&mut self, mode: Option<ReconnectMode>) {
         let mode = mode.unwrap_or(ReconnectMode::DirectedKnock);
         match mode {
@@ -442,7 +475,32 @@ impl Host {
             ordinary_bonds: Vec::new(),
             next_id: 1,
             ltk_override: None,
+            vault_secret: vault_secret_from_identity(identity),
+            credential_id: None,
+            trusted_factory_public: Some(public_key(&DEFAULT_FACTORY_SECRET)),
+            used_attestation_nonces: Vec::new(),
+            next_nonce: 1,
+            replay_attestation_nonce: false,
+            last_attestation_nonce: None,
         }
+    }
+
+    pub fn that_cannot_verify_attestation() -> Self {
+        let mut host = Self::new();
+        host.trusted_factory_public = None;
+        host
+    }
+
+    pub fn sharing_vault_with(other: &Self, identity: [u8; 6]) -> Self {
+        let mut host = Self::with_identity(identity);
+        host.vault_secret = other.vault_secret;
+        host.credential_id = other.credential_id;
+        host.bonds = other.bonds.clone();
+        host
+    }
+
+    pub fn replay_next_attestation_nonce(&mut self) {
+        self.replay_attestation_nonce = true;
     }
 
     pub fn without_stealth_bonding() -> Self {
@@ -493,6 +551,12 @@ fn fixture_ltk(host: [u8; 6], accessory: [u8; 6]) -> [u8; 16] {
     ltk[..6].copy_from_slice(&host);
     ltk[6..12].copy_from_slice(&accessory);
     ltk
+}
+
+fn nonce_from_counter(counter: u32) -> Nonce {
+    let mut nonce = [0u8; 32];
+    nonce[28..32].copy_from_slice(&counter.to_be_bytes());
+    nonce
 }
 
 pub fn pair(
@@ -557,6 +621,43 @@ pub fn pair(
     };
     let params_response_pdu = response.encode(PARAMS_RESPONSE_OPCODE);
 
+    let nonce = if host.replay_attestation_nonce {
+        host.replay_attestation_nonce = false;
+        host.last_attestation_nonce
+            .ok_or(PairingError::AttestationReplay)?
+    } else {
+        let nonce = nonce_from_counter(host.next_nonce);
+        host.next_nonce += 1;
+        nonce
+    };
+    if host.used_attestation_nonces.contains(&nonce) {
+        return Err(PairingError::AttestationReplay);
+    }
+
+    let Some(factory_secret) = accessory.factory_secret.as_ref() else {
+        return Err(PairingError::AttestationFailed);
+    };
+    let Some(trusted) = host.trusted_factory_public.as_ref() else {
+        return Err(PairingError::AttestationFailed);
+    };
+    let transcript = attestation_message(
+        host.identity,
+        accessory.identity,
+        offer.policy.code(),
+        offer.reconnect.code(),
+        &nonce,
+    );
+    let attestation = sign(factory_secret, &transcript);
+    if !verify(trusted, &transcript, &attestation) {
+        return Err(PairingError::AttestationFailed);
+    }
+    host.used_attestation_nonces.push(nonce);
+    host.last_attestation_nonce = Some(nonce);
+
+    let vault_public = public_key(&host.vault_secret);
+    let credential_id = host.credential_id.unwrap_or_else(|| host.allocate_id());
+    host.credential_id = Some(credential_id);
+
     let ltk = fixture_ltk(host.identity, accessory.identity);
 
     if offer.policy.accessory_leaves_public() {
@@ -585,26 +686,26 @@ pub fn pair(
 
     accessory.require_delegated_confirm = offer.require_delegated_confirm;
     accessory.clear_enrollment_clock();
-    let accessory_id = accessory.allocate_id();
-    let host_id = host.allocate_id();
     accessory.bonds.push(StoredBond {
-        id: accessory_id,
+        id: credential_id,
         peer_identity: host.identity,
         ltk,
         policy: offer.policy,
         reconnect: offer.reconnect,
+        public_key: vault_public,
     });
     host.bonds.push(StoredBond {
-        id: host_id,
+        id: credential_id,
         peer_identity: accessory.identity,
         ltk,
         policy: offer.policy,
         reconnect: offer.reconnect,
+        public_key: vault_public,
     });
 
     Ok(PairingOutcome {
         mode: PairingMode::StealthBonding,
-        bond_passkey_id: Some(accessory_id),
+        bond_passkey_id: Some(credential_id),
         stealth_policy: offer.policy,
         reconnect_mode: offer.reconnect,
         params_pdu: Some(params_pdu),
@@ -613,23 +714,48 @@ pub fn pair(
 }
 
 pub fn reconnect(host: &Host, accessory: &mut Accessory) -> Result<BondedLink, ReconnectError> {
-    if let Some(accessory_bond) = accessory
-        .bonds
-        .iter()
-        .find(|bond| bond.peer_identity == host.identity)
-    {
-        let host_bond = host
-            .bonds
-            .iter()
-            .find(|bond| bond.peer_identity == accessory.identity)
-            .ok_or(ReconnectError::NoBond)?;
+    if !accessory.bonds.is_empty() {
         match accessory.state {
             GapState::BondedKnock | GapState::PublicBonded | GapState::Enrollment => {}
             GapState::BondedSilent | GapState::Unprovisioned => {
                 return Err(ReconnectError::NotConnectable);
             }
         }
-        let presented_ltk = host.ltk_override.unwrap_or(host_bond.ltk);
+
+        let challenge = if accessory.replay_assertion_challenge {
+            accessory.replay_assertion_challenge = false;
+            accessory
+                .last_assertion_challenge
+                .ok_or(ReconnectError::AssertionReplay)?
+        } else {
+            let challenge = nonce_from_counter(accessory.next_challenge);
+            accessory.next_challenge += 1;
+            challenge
+        };
+        if accessory.used_assertion_challenges.contains(&challenge) {
+            return Err(ReconnectError::AssertionReplay);
+        }
+
+        let message = assertion_message(&challenge, accessory.identity);
+        let assertion = sign(&host.vault_secret, &message);
+        let Some(accessory_bond) = accessory
+            .bonds
+            .iter()
+            .find(|bond| verify(&bond.public_key, &message, &assertion))
+        else {
+            return Err(ReconnectError::NoBond);
+        };
+
+        accessory.used_assertion_challenges.push(challenge);
+        accessory.last_assertion_challenge = Some(challenge);
+
+        let host_ltk = host
+            .bonds
+            .iter()
+            .find(|bond| bond.id == accessory_bond.id)
+            .map(|bond| bond.ltk)
+            .unwrap_or_else(|| fixture_ltk(host.identity, accessory.identity));
+        let presented_ltk = host.ltk_override.unwrap_or(host_ltk);
         if presented_ltk != accessory_bond.ltk {
             return Err(ReconnectError::EncryptionFailed);
         }
