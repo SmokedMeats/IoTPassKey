@@ -1,0 +1,9 @@
+[package]
+name = "stealth-bonding-sim"
+version = "0.1.0"
+edition = "2021"
+description = "PDU-level Stealth Bonding simulator (spec oracle, no radio)"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
