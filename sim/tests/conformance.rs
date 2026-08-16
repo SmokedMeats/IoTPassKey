@@ -22,6 +22,7 @@ fn enrollment_then_peripheral_only_commitment_leaves_no_public_advertising() {
     assert!(host.appears_on_public_scan_list());
     assert_eq!(outcome.stealth_policy, StealthPolicy::PeripheralOnly);
     assert_eq!(outcome.reconnect_mode, ReconnectMode::DirectedKnock);
+    assert_eq!(accessory.advertising(), &Advertising::DirectedKnock);
 }
 
 #[test]
@@ -72,21 +73,21 @@ fn pairing_exchanges_spec_params_pdus() {
 fn second_bond_passkey_lets_both_hosts_reconnect() {
     let mut accessory = Accessory::new();
     let mut laptop = Host::new();
-    let mut phone = Host::with_identity([0x33, 0, 0, 0, 0, 0x03]);
+    let mut second_host = Host::with_identity([0x33, 0, 0, 0, 0, 0x03]);
 
     enroll_default(&mut accessory, &mut laptop);
     accessory.open_enrollment().expect("second enrollment");
-    pair(&mut phone, &mut accessory, PairingOffer::default()).expect("second pair");
+    pair(&mut second_host, &mut accessory, PairingOffer::default()).expect("second pair");
 
     assert_eq!(accessory.bond_ids().len(), 2);
     reconnect(&laptop, &mut accessory).expect("laptop reconnect");
-    reconnect(&phone, &mut accessory).expect("phone reconnect");
+    reconnect(&second_host, &mut accessory).expect("second host reconnect");
     assert!(!accessory.appears_on_public_scan_list());
 }
 
 #[test]
 fn commitment_failure_stores_no_bond_passkey() {
-    let mut accessory = Accessory::that_cannot_hide();
+    let mut accessory = Accessory::that_cannot_leave_public_advertising();
     let mut host = Host::new();
     accessory.open_enrollment().expect("enrollment");
 
@@ -133,14 +134,14 @@ fn delegated_enrollment_from_unbonded_peer_is_rejected() {
 fn delegated_enrollment_from_bonded_host_opens_window() {
     let mut accessory = Accessory::new();
     let mut laptop = Host::new();
-    let mut phone = Host::with_identity([0x33, 0, 0, 0, 0, 0x03]);
+    let mut second_host = Host::with_identity([0x33, 0, 0, 0, 0, 0x03]);
     enroll_default(&mut accessory, &mut laptop);
 
     let link = reconnect(&laptop, &mut accessory).expect("link");
     accessory
         .open_delegated_enrollment(Some(&link))
         .expect("delegated");
-    pair(&mut phone, &mut accessory, PairingOffer::default()).expect("phone pair");
+    pair(&mut second_host, &mut accessory, PairingOffer::default()).expect("second host pair");
 
     assert_eq!(accessory.bond_ids().len(), 2);
 }
@@ -208,7 +209,7 @@ fn silent_until_wake_is_not_connectable_until_wake() {
 }
 
 #[test]
-fn both_policy_hides_host_and_accessory() {
+fn both_policy_leaves_neither_on_public_scan_list() {
     let mut accessory = Accessory::new();
     let mut host = Host::new();
     accessory.open_enrollment().expect("enrollment");

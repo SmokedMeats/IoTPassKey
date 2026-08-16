@@ -138,13 +138,13 @@ pub enum DelegatedError {
 pub enum Advertising {
     Off,
     Undirected { local_name: Option<String> },
-    Directed { target: [u8; 6] },
+    DirectedKnock,
 }
 
 impl Advertising {
     pub fn is_public(&self) -> bool {
         match self {
-            Self::Off | Self::Directed { .. } => false,
+            Self::Off | Self::DirectedKnock => false,
             Self::Undirected { .. } => true,
         }
     }
@@ -172,7 +172,7 @@ pub struct Accessory {
     capacity: u8,
     supports_stealth_bonding: bool,
     supports_le_sc: bool,
-    controller_can_hide: bool,
+    controller_can_leave_public_advertising: bool,
     state: GapState,
     advertising: Advertising,
     bonds: Vec<StoredBond>,
@@ -185,6 +185,7 @@ pub struct Host {
     supports_stealth_bonding: bool,
     supports_le_sc: bool,
     public_advertising: bool,
+    capacity: u8,
     bonds: Vec<StoredBond>,
     next_id: u32,
     ltk_override: Option<[u8; 16]>,
@@ -207,7 +208,7 @@ impl Accessory {
             capacity,
             supports_stealth_bonding: true,
             supports_le_sc: true,
-            controller_can_hide: true,
+            controller_can_leave_public_advertising: true,
             state: GapState::Unprovisioned,
             advertising: Advertising::Undirected {
                 local_name: Some("Accessory".into()),
@@ -218,9 +219,9 @@ impl Accessory {
         }
     }
 
-    pub fn that_cannot_hide() -> Self {
+    pub fn that_cannot_leave_public_advertising() -> Self {
         let mut accessory = Self::new();
-        accessory.controller_can_hide = false;
+        accessory.controller_can_leave_public_advertising = false;
         accessory
     }
 
@@ -334,12 +335,7 @@ impl Accessory {
             }
             ReconnectMode::DirectedKnock | ReconnectMode::FilterAcceptList => {
                 self.state = GapState::BondedKnock;
-                let target = self
-                    .bonds
-                    .last()
-                    .map(|bond| bond.peer_identity)
-                    .unwrap_or([0; 6]);
-                self.advertising = Advertising::Directed { target };
+                self.advertising = Advertising::DirectedKnock;
             }
         }
     }
@@ -362,6 +358,7 @@ impl Host {
             supports_stealth_bonding: true,
             supports_le_sc: true,
             public_advertising: true,
+            capacity: 8,
             bonds: Vec::new(),
             next_id: 1,
             ltk_override: None,
@@ -448,7 +445,7 @@ pub fn pair(
         reconnect: offer.reconnect,
         require_delegated_confirm: offer.require_delegated_confirm,
         allow_peer_policy_change: offer.allow_peer_policy_change,
-        max_bonds: accessory.capacity,
+        max_bonds: host.capacity,
     };
     let params_pdu = params.encode(PARAMS_OPCODE);
     let (opcode, decoded) =
@@ -467,14 +464,34 @@ pub fn pair(
     let params_response_pdu = response.encode(PARAMS_RESPONSE_OPCODE);
 
     let ltk = fixture_ltk(host.identity, accessory.identity);
-    let accessory_id = accessory.allocate_id();
-    let host_id = host.allocate_id();
 
-    if offer.policy.accessory_leaves_public() && !accessory.controller_can_hide {
-        return Err(PairingError::CommitmentFailed);
+    if offer.policy.accessory_leaves_public() {
+        if accessory.controller_can_leave_public_advertising {
+            accessory.enter_bonded_reconnect(Some(offer.reconnect));
+        } else {
+            accessory.advertising = Advertising::Undirected { local_name: None };
+        }
+        if accessory.advertising.is_public() {
+            accessory.state = GapState::Enrollment;
+            accessory.advertising = Advertising::Undirected {
+                local_name: Some("Accessory".into()),
+            };
+            return Err(PairingError::CommitmentFailed);
+        }
+    } else {
+        accessory.state = GapState::PublicBonded;
+        accessory.advertising = Advertising::Undirected {
+            local_name: Some("Accessory".into()),
+        };
+    }
+
+    if offer.policy.host_leaves_public() {
+        host.public_advertising = false;
     }
 
     accessory.require_delegated_confirm = offer.require_delegated_confirm;
+    let accessory_id = accessory.allocate_id();
+    let host_id = host.allocate_id();
     accessory.bonds.push(StoredBond {
         id: accessory_id,
         peer_identity: host.identity,
@@ -489,19 +506,6 @@ pub fn pair(
         policy: offer.policy,
         reconnect: offer.reconnect,
     });
-
-    if offer.policy.accessory_leaves_public() {
-        accessory.enter_bonded_reconnect(Some(offer.reconnect));
-    } else {
-        accessory.state = GapState::PublicBonded;
-        accessory.advertising = Advertising::Undirected {
-            local_name: Some("Accessory".into()),
-        };
-    }
-
-    if offer.policy.host_leaves_public() {
-        host.public_advertising = false;
-    }
 
     Ok(PairingOutcome {
         mode: PairingMode::StealthBonding,
