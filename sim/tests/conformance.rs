@@ -112,7 +112,8 @@ fn unsupported_peer_falls_back_and_does_not_claim_stealth_bonding() {
     assert!(accessory.bond_ids().is_empty());
     assert_eq!(accessory.ordinary_bond_count(), 1);
     assert!(accessory.appears_on_public_scan_list());
-    reconnect(&host, &mut accessory).expect("ordinary reconnect");
+    let link = reconnect(&host, &mut accessory).expect("ordinary reconnect");
+    assert!(link.bond_passkey_id.is_none());
 }
 
 #[test]
@@ -268,7 +269,7 @@ fn delegated_enrollment_from_connected_unbonded_peer_is_rejected() {
     enroll_default(&mut accessory, &mut host);
 
     let fake = BondedLink {
-        bond_passkey_id: BondPasskeyId([0x09; 16]),
+        bond_passkey_id: Some(BondPasskeyId([0x09; 16])),
     };
     let error = accessory
         .open_delegated_enrollment(Some(&fake))

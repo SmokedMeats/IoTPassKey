@@ -207,7 +207,7 @@ pub struct Host {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BondedLink {
-    pub bond_passkey_id: BondPasskeyId,
+    pub bond_passkey_id: Option<BondPasskeyId>,
 }
 
 impl Accessory {
@@ -288,14 +288,13 @@ impl Accessory {
         &mut self,
         link: &BondedLink,
     ) -> Result<(), DelegatedError> {
-        if self.pending_authorizer != Some(link.bond_passkey_id) {
+        let Some(id) = link.bond_passkey_id else {
+            return Err(DelegatedError::UnbondedPeer);
+        };
+        if self.pending_authorizer != Some(id) {
             return Err(DelegatedError::NoBond);
         }
-        if !self
-            .bonds
-            .iter()
-            .any(|bond| bond.id == link.bond_passkey_id)
-        {
+        if !self.bonds.iter().any(|bond| bond.id == id) {
             return Err(DelegatedError::NoBond);
         }
         self.delegated_confirmed = true;
@@ -364,18 +363,17 @@ impl Accessory {
         let Some(link) = link else {
             return Err(DelegatedError::UnbondedPeer);
         };
-        if !self
-            .bonds
-            .iter()
-            .any(|bond| bond.id == link.bond_passkey_id)
-        {
+        let Some(id) = link.bond_passkey_id else {
+            return Err(DelegatedError::UnbondedPeer);
+        };
+        if !self.bonds.iter().any(|bond| bond.id == id) {
             return Err(DelegatedError::NoBond);
         }
         self.open_enrollment().map_err(|err| match err {
             PairingError::TableFull => DelegatedError::TableFull,
             _ => DelegatedError::NoBond,
         })?;
-        self.pending_authorizer = Some(link.bond_passkey_id);
+        self.pending_authorizer = Some(id);
         self.delegated_confirmed = !self.require_delegated_confirm;
         Ok(())
     }
@@ -521,7 +519,7 @@ pub fn pair(
             peer_identity: accessory.identity,
             ltk,
         });
-        accessory.clear_enrollment_clock();
+        accessory.close_enrollment_window();
         return Ok(PairingOutcome {
             mode: PairingMode::Fallback,
             bond_passkey_id: None,
@@ -636,7 +634,7 @@ pub fn reconnect(host: &Host, accessory: &mut Accessory) -> Result<BondedLink, R
             return Err(ReconnectError::EncryptionFailed);
         }
         return Ok(BondedLink {
-            bond_passkey_id: accessory_bond.id,
+            bond_passkey_id: Some(accessory_bond.id),
         });
     }
 
@@ -655,6 +653,6 @@ pub fn reconnect(host: &Host, accessory: &mut Accessory) -> Result<BondedLink, R
         return Err(ReconnectError::EncryptionFailed);
     }
     Ok(BondedLink {
-        bond_passkey_id: BondPasskeyId([0; 16]),
+        bond_passkey_id: None,
     })
 }
