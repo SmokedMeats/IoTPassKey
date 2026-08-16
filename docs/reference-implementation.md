@@ -54,6 +54,6 @@ The crate is `stealth-bonding-sim` in `sim/`. Integration tests live in `sim/tes
 1. Simulator + golden PDU traces (this repo) — done.
 2. Firmware adapter (`firmware/accessory`) on nRF52840 DK — GAP half on stock Zephyr 4.4.
 3. Host-stack adapter (BlueZ / Android / etc.) when the on-air format is stable.
-4. Zephyr host patch for draft SMP Params, if we want the full pairing mode on the air.
+4. Zephyr host patch for draft SMP Params, if we want those PDUs on the air.
 
 Commercial products that might sit on top of that path (modules, SDK, certified badge) are listed in [`commercial.md`](commercial.md).

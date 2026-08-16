@@ -37,5 +37,5 @@ gcc -I firmware/accessory/src firmware/accessory/tests/test_gap_sm.c \
 ## What this is not
 
 - Not a download for arbitrary speakers
-- Not the custom SMP pairing mode (needs a Zephyr host patch)
+- Not the draft SMP Params extension (needs a Zephyr host patch)
 - Not nRF Connect SDK (vanilla Zephyr 4.4.2)
