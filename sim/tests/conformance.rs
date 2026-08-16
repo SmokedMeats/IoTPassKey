@@ -1,7 +1,7 @@
 use stealth_bonding_sim::{
-    pair, reconnect, Accessory, Advertising, DelegatedError, Host, PairingError, PairingMode,
-    PairingOffer, ReconnectError, ReconnectMode, StealthBondingParams, StealthPolicy,
-    PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE,
+    pair, reconnect, Accessory, Advertising, BondPasskeyId, BondedLink, DelegatedError, Host,
+    PairingError, PairingMode, PairingOffer, ReconnectError, ReconnectMode, StealthBondingParams,
+    StealthPolicy, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE, T_SB_ENROLL_MS,
 };
 
 fn enroll_default(accessory: &mut Accessory, host: &mut Host) {
@@ -109,6 +109,10 @@ fn unsupported_peer_falls_back_and_does_not_claim_stealth_bonding() {
     assert_eq!(outcome.mode, PairingMode::Fallback);
     assert!(outcome.bond_passkey_id.is_none());
     assert!(outcome.params_pdu.is_none());
+    assert!(accessory.bond_ids().is_empty());
+    assert_eq!(accessory.ordinary_bond_count(), 1);
+    assert!(accessory.appears_on_public_scan_list());
+    reconnect(&host, &mut accessory).expect("ordinary reconnect");
 }
 
 #[test]
@@ -225,4 +229,113 @@ fn both_policy_leaves_neither_on_public_scan_list() {
 
     assert!(!accessory.appears_on_public_scan_list());
     assert!(!host.appears_on_public_scan_list());
+}
+
+#[test]
+fn enrollment_window_expires_to_unprovisioned_when_bond_table_empty() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    accessory.open_enrollment().expect("enrollment");
+
+    accessory.advance(T_SB_ENROLL_MS);
+
+    assert_eq!(
+        pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("expired"),
+        PairingError::NotEnrolling
+    );
+    assert!(accessory.appears_on_public_scan_list());
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
+fn enrollment_window_expires_to_directed_knock_when_bond_table_has_entries() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    enroll_default(&mut accessory, &mut host);
+    accessory.open_enrollment().expect("second window");
+
+    accessory.advance(T_SB_ENROLL_MS);
+
+    assert!(!accessory.appears_on_public_scan_list());
+    assert_eq!(accessory.advertising(), &Advertising::DirectedKnock);
+    reconnect(&host, &mut accessory).expect("still bonded");
+}
+
+#[test]
+fn delegated_enrollment_from_connected_unbonded_peer_is_rejected() {
+    let mut accessory = Accessory::new();
+    let mut host = Host::new();
+    enroll_default(&mut accessory, &mut host);
+
+    let fake = BondedLink {
+        bond_passkey_id: BondPasskeyId([0x09; 16]),
+    };
+    let error = accessory
+        .open_delegated_enrollment(Some(&fake))
+        .expect_err("unbonded link");
+    assert_eq!(error, DelegatedError::NoBond);
+}
+
+#[test]
+fn delegated_confirm_is_required_before_a_later_bond_passkey() {
+    let mut accessory = Accessory::new();
+    let mut laptop = Host::new();
+    let mut second_host = Host::with_identity([0x33, 0, 0, 0, 0, 0x03]);
+    accessory.open_enrollment().expect("enrollment");
+    pair(
+        &mut laptop,
+        &mut accessory,
+        PairingOffer {
+            require_delegated_confirm: true,
+            ..PairingOffer::default()
+        },
+    )
+    .expect("first pair");
+
+    let link = reconnect(&laptop, &mut accessory).expect("link");
+    accessory
+        .open_delegated_enrollment(Some(&link))
+        .expect("delegated");
+
+    assert_eq!(
+        pair(&mut second_host, &mut accessory, PairingOffer::default()).expect_err("no confirm"),
+        PairingError::DelegatedConfirmRequired
+    );
+    assert_eq!(accessory.bond_ids().len(), 1);
+
+    accessory
+        .confirm_delegated_enrollment(&link)
+        .expect("confirm");
+    pair(&mut second_host, &mut accessory, PairingOffer::default()).expect("after confirm");
+    assert_eq!(accessory.bond_ids().len(), 2);
+}
+
+#[test]
+fn delegated_confirm_timeout_discards_the_new_pair() {
+    let mut accessory = Accessory::new();
+    let mut laptop = Host::new();
+    let mut second_host = Host::with_identity([0x33, 0, 0, 0, 0, 0x03]);
+    accessory.open_enrollment().expect("enrollment");
+    pair(
+        &mut laptop,
+        &mut accessory,
+        PairingOffer {
+            require_delegated_confirm: true,
+            ..PairingOffer::default()
+        },
+    )
+    .expect("first pair");
+
+    let link = reconnect(&laptop, &mut accessory).expect("link");
+    accessory
+        .open_delegated_enrollment(Some(&link))
+        .expect("delegated");
+    accessory.advance(T_SB_ENROLL_MS);
+
+    assert_eq!(
+        pair(&mut second_host, &mut accessory, PairingOffer::default()).expect_err("expired"),
+        PairingError::NotEnrolling
+    );
+    assert_eq!(accessory.bond_ids().len(), 1);
+    assert!(!accessory.appears_on_public_scan_list());
 }

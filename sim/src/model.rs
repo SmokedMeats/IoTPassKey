@@ -1,5 +1,8 @@
 use crate::pdu::{StealthBondingParams, PARAMS_LEN, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE};
 
+pub const T_SB_ENROLL_MS: u32 = 30_000;
+pub const T_SB_ENROLL_MAX_MS: u32 = 180_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StealthPolicy {
     PeripheralOnly,
@@ -109,6 +112,7 @@ pub enum PairingError {
     PolicyRejected,
     CommitmentFailed,
     ParamsRejected,
+    DelegatedConfirmRequired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +171,11 @@ struct StoredBond {
     reconnect: ReconnectMode,
 }
 
+struct OrdinaryBond {
+    peer_identity: [u8; 6],
+    ltk: [u8; 16],
+}
+
 pub struct Accessory {
     identity: [u8; 6],
     capacity: u8,
@@ -176,8 +185,12 @@ pub struct Accessory {
     state: GapState,
     advertising: Advertising,
     bonds: Vec<StoredBond>,
+    ordinary_bonds: Vec<OrdinaryBond>,
     next_id: u32,
     require_delegated_confirm: bool,
+    enrollment_remaining_ms: Option<u32>,
+    pending_authorizer: Option<BondPasskeyId>,
+    delegated_confirmed: bool,
 }
 
 pub struct Host {
@@ -187,6 +200,7 @@ pub struct Host {
     public_advertising: bool,
     capacity: u8,
     bonds: Vec<StoredBond>,
+    ordinary_bonds: Vec<OrdinaryBond>,
     next_id: u32,
     ltk_override: Option<[u8; 16]>,
 }
@@ -214,8 +228,12 @@ impl Accessory {
                 local_name: Some("Accessory".into()),
             },
             bonds: Vec::new(),
+            ordinary_bonds: Vec::new(),
             next_id: 1,
             require_delegated_confirm: false,
+            enrollment_remaining_ms: None,
+            pending_authorizer: None,
+            delegated_confirmed: false,
         }
     }
 
@@ -245,6 +263,42 @@ impl Accessory {
         self.advertising = Advertising::Undirected {
             local_name: Some("Accessory".into()),
         };
+        self.enrollment_remaining_ms = Some(T_SB_ENROLL_MS.min(T_SB_ENROLL_MAX_MS));
+        self.pending_authorizer = None;
+        self.delegated_confirmed = false;
+        Ok(())
+    }
+
+    pub fn ordinary_bond_count(&self) -> usize {
+        self.ordinary_bonds.len()
+    }
+
+    pub fn advance(&mut self, ms: u32) {
+        let Some(remaining) = self.enrollment_remaining_ms else {
+            return;
+        };
+        if remaining > ms {
+            self.enrollment_remaining_ms = Some(remaining - ms);
+            return;
+        }
+        self.close_enrollment_window();
+    }
+
+    pub fn confirm_delegated_enrollment(
+        &mut self,
+        link: &BondedLink,
+    ) -> Result<(), DelegatedError> {
+        if self.pending_authorizer != Some(link.bond_passkey_id) {
+            return Err(DelegatedError::NoBond);
+        }
+        if !self
+            .bonds
+            .iter()
+            .any(|bond| bond.id == link.bond_passkey_id)
+        {
+            return Err(DelegatedError::NoBond);
+        }
+        self.delegated_confirmed = true;
         Ok(())
     }
 
@@ -280,6 +334,10 @@ impl Accessory {
 
     pub fn factory_reset(&mut self) {
         self.bonds.clear();
+        self.ordinary_bonds.clear();
+        self.pending_authorizer = None;
+        self.delegated_confirmed = false;
+        self.enrollment_remaining_ms = None;
         self.state = GapState::Unprovisioned;
         self.advertising = Advertising::Undirected {
             local_name: Some("Accessory".into()),
@@ -317,7 +375,30 @@ impl Accessory {
             PairingError::TableFull => DelegatedError::TableFull,
             _ => DelegatedError::NoBond,
         })?;
+        self.pending_authorizer = Some(link.bond_passkey_id);
+        self.delegated_confirmed = !self.require_delegated_confirm;
         Ok(())
+    }
+
+    fn close_enrollment_window(&mut self) {
+        self.enrollment_remaining_ms = None;
+        self.pending_authorizer = None;
+        self.delegated_confirmed = false;
+        if self.bonds.is_empty() {
+            self.state = GapState::Unprovisioned;
+            self.advertising = Advertising::Undirected {
+                local_name: Some("Accessory".into()),
+            };
+            return;
+        }
+        let mode = self.bonds.last().map(|bond| bond.reconnect);
+        self.enter_bonded_reconnect(mode);
+    }
+
+    fn clear_enrollment_clock(&mut self) {
+        self.enrollment_remaining_ms = None;
+        self.pending_authorizer = None;
+        self.delegated_confirmed = false;
     }
 
     fn allocate_id(&mut self) -> BondPasskeyId {
@@ -360,6 +441,7 @@ impl Host {
             public_advertising: true,
             capacity: 8,
             bonds: Vec::new(),
+            ordinary_bonds: Vec::new(),
             next_id: 1,
             ltk_override: None,
         }
@@ -430,6 +512,16 @@ pub fn pair(
         return Err(PairingError::LegacyPairingForbidden);
     }
     if !host.supports_stealth_bonding || !accessory.supports_stealth_bonding {
+        let ltk = fixture_ltk(host.identity, accessory.identity);
+        accessory.ordinary_bonds.push(OrdinaryBond {
+            peer_identity: host.identity,
+            ltk,
+        });
+        host.ordinary_bonds.push(OrdinaryBond {
+            peer_identity: accessory.identity,
+            ltk,
+        });
+        accessory.clear_enrollment_clock();
         return Ok(PairingOutcome {
             mode: PairingMode::Fallback,
             bond_passkey_id: None,
@@ -438,6 +530,10 @@ pub fn pair(
             params_pdu: None,
             params_response_pdu: None,
         });
+    }
+
+    if accessory.pending_authorizer.is_some() && !accessory.delegated_confirmed {
+        return Err(PairingError::DelegatedConfirmRequired);
     }
 
     let params = StealthBondingParams {
@@ -490,6 +586,7 @@ pub fn pair(
     }
 
     accessory.require_delegated_confirm = offer.require_delegated_confirm;
+    accessory.clear_enrollment_clock();
     let accessory_id = accessory.allocate_id();
     let host_id = host.allocate_id();
     accessory.bonds.push(StoredBond {
@@ -518,30 +615,46 @@ pub fn pair(
 }
 
 pub fn reconnect(host: &Host, accessory: &mut Accessory) -> Result<BondedLink, ReconnectError> {
-    let host_bond = host
-        .bonds
-        .iter()
-        .find(|bond| bond.peer_identity == accessory.identity)
-        .ok_or(ReconnectError::NoBond)?;
-    let accessory_bond = accessory
+    if let Some(accessory_bond) = accessory
         .bonds
         .iter()
         .find(|bond| bond.peer_identity == host.identity)
-        .ok_or(ReconnectError::NoBond)?;
-
-    match accessory.state {
-        GapState::BondedKnock | GapState::PublicBonded | GapState::Enrollment => {}
-        GapState::BondedSilent | GapState::Unprovisioned => {
-            return Err(ReconnectError::NotConnectable);
+    {
+        let host_bond = host
+            .bonds
+            .iter()
+            .find(|bond| bond.peer_identity == accessory.identity)
+            .ok_or(ReconnectError::NoBond)?;
+        match accessory.state {
+            GapState::BondedKnock | GapState::PublicBonded | GapState::Enrollment => {}
+            GapState::BondedSilent | GapState::Unprovisioned => {
+                return Err(ReconnectError::NotConnectable);
+            }
         }
+        let presented_ltk = host.ltk_override.unwrap_or(host_bond.ltk);
+        if presented_ltk != accessory_bond.ltk {
+            return Err(ReconnectError::EncryptionFailed);
+        }
+        return Ok(BondedLink {
+            bond_passkey_id: accessory_bond.id,
+        });
     }
 
-    let presented_ltk = host.ltk_override.unwrap_or(host_bond.ltk);
-    if presented_ltk != accessory_bond.ltk {
+    let accessory_ordinary = accessory
+        .ordinary_bonds
+        .iter()
+        .find(|bond| bond.peer_identity == host.identity)
+        .ok_or(ReconnectError::NoBond)?;
+    let host_ordinary = host
+        .ordinary_bonds
+        .iter()
+        .find(|bond| bond.peer_identity == accessory.identity)
+        .ok_or(ReconnectError::NoBond)?;
+    let presented_ltk = host.ltk_override.unwrap_or(host_ordinary.ltk);
+    if presented_ltk != accessory_ordinary.ltk {
         return Err(ReconnectError::EncryptionFailed);
     }
-
     Ok(BondedLink {
-        bond_passkey_id: accessory_bond.id,
+        bond_passkey_id: BondPasskeyId([0; 16]),
     })
 }
