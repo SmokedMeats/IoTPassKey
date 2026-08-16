@@ -17,5 +17,7 @@ manifest:
           - cmsis_6
           - hal_nordic
           - mbedtls
+          - tf-psa-crypto
+          - mldsa-native
           - tinycrypt
           - segger
