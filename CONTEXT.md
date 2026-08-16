@@ -19,8 +19,12 @@ The Host operating-system store for Bond Passkey private keys (the same class of
 _Avoid_: password manager UI, authenticator app, Authy
 
 **Factory Attestation Key**:
-A stable asymmetric key burned into the Accessory at manufacture. It signs the pairing transcript plus a Host nonce so the Host can verify “genuine device of this model.” It does not rotate. It does not prove “the speaker in your hand” versus a same-model clone with a stolen factory key.
-_Avoid_: TOTP seed, pairing PIN, Authy secret
+A per-unit asymmetric key burned into that Accessory at manufacture. It signs the pairing transcript after Low Energy Secure Connections Phase 2. The signed bytes include both sides’ SC public keys and a Host nonce. It does not rotate. A stolen unit key enrolls only that unit.
+_Avoid_: TOTP seed, pairing PIN, Authy secret, shared model key
+
+**Manufacturer Root**:
+The public key the Host already trusts for a brand. It verifies each unit’s factory certificate. It is not the unit’s attestation key. A stolen root is a brand-wide incident.
+_Avoid_: model public key (unqualified), factory PIN
 
 **Assertion**:
 A signature over a fresh challenge proving the Host still holds the Bond Passkey private key. Proofs rotate; the root credential does not.

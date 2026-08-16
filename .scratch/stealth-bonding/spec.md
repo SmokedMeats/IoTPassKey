@@ -16,7 +16,7 @@ The user cannot install an app to fix this on arbitrary radios. The behavior has
 
 Treat Stealth Bonding as a Core Spec pairing-mode extension (SMP + GAP), not a GATT profile and not an app.
 
-Devices that both support it negotiate the mode, verify factory attestation, create a Bond Passkey in the Host vault (Accessory stores the public key), encrypt the link with LE Secure Connections, then apply Stealth Commitment. Default Stealth Policy is PeripheralOnly. The user does not see a passkey sheet. A synced Host reuses `credential_id` without a new Enrollment Window. Strangers enroll with the pairing button or Delegated Enrollment. Reconnect is an Assertion over a fresh challenge, then Directed Knock. If commitment cannot stop Public Advertising, pairing fails and keys are discarded.
+Devices that both support it negotiate the mode, run Low Energy Secure Connections, verify a per-unit factory certificate under a Manufacturer Root and an attestation over that SC transcript, create a Bond Passkey in the Host vault (Accessory stores the public key), then apply Stealth Commitment. Default Stealth Policy is PeripheralOnly. The user does not see a passkey sheet. A synced Host reuses `credential_id` without a new Enrollment Window. Strangers enroll with the pairing button or Delegated Enrollment. Reconnect is an Assertion over a fresh challenge, then Directed Knock. If commitment cannot stop Public Advertising, pairing fails and keys are discarded.
 
 This repo’s job is the open specification plus, later, a reference implementation and conformance tests. Rollout to real products is firmware and OS updates.
 
@@ -53,7 +53,7 @@ This repo’s job is the open specification plus, later, a reference implementat
 29. As a chip firmware engineer, I want the feature in SMP and GAP, so that a GATT app cannot pretend to own bonding.
 30. As a Host OS engineer, I want a GATT management service only after a bond exists, so that list/revoke/open-enrollment have a standard surface.
 31. As a Host OS engineer, I want Bond Table List to omit LTK and IRK, so that a debug screen cannot leak keys.
-32. As a security reviewer, I want factory attestation over a fresh nonce, so that Just Works is not the trust root.
+32. As a security reviewer, I want per-unit factory attestation over the Low Energy Secure Connections transcript plus a fresh nonce, so that Just Works is not the trust root and the factory key is bound to this link.
 33. As a security reviewer, I want Delegated Enrollment to require an existing encrypted Bond Passkey, so that strangers cannot open pairing.
 34. As a security reviewer, I want an optional confirm-on-authorizing-Host for additional enrollments, so that a stolen session cannot quietly add a peer.
 35. As a product designer, I want no new buttons, screens, or LEDs required, so that existing SKUs can take a firmware update.
@@ -70,6 +70,9 @@ This repo’s job is the open specification plus, later, a reference implementat
 46. As an Accessory owner, I want to revoke one Bond Passkey from the laptop UI while the speaker is connected, so that I do not need the speaker’s reset.
 47. As an Accessory owner, I want local discoverability override on the Host, so that a protocol peer cannot trap my laptop in hidden mode.
 48. As a reference-implementation developer, I want a single test seam at the pairing-plus-advertising state machine, so that tests do not poke Controller internals.
+49. As a Host user, I want two Enrollment ads with the same product name to show different rows (name plus unit suffix), so that I am not looking at identical twins.
+50. As a speaker owner, I want the phone to hear an automatic tone from the speaker during pair, so that I do not get a new sheet or code.
+51. As a Host implementer, I want an optional closeness threshold during the Enrollment Window, so that a distant advertisement can be ignored without calling that authentication.
 
 ## Implementation Decisions
 
@@ -78,7 +81,7 @@ This repo’s job is the open specification plus, later, a reference implementat
 - Module to build later: a Stealth Bonding state machine that owns Enrollment, pairing params, Bond Table, and advertising-state commands. That is the only external seam.
 - The state machine’s interface is: start enrollment, accept/reject a peer, apply commitment, reconnect, revoke, reset. Callers do not set raw advertising PDUs.
 - Link crypto is LE Secure Connections. The Bond Passkey is a Host-vault P-256 credential (ADR 0006). This repo does not invent a new link cipher or use TOTP.
-- Factory attestation and reconnect assertions are real signatures in the simulator, not “always ok” stubs.
+- Factory attestation and reconnect assertions are real signatures in the simulator, not “always ok” stubs. Attestation covers stubbed LE SC public keys. Each Accessory fixture has its own unit key and a cert under a manufacturer root.
 - Default Stealth Policy is PeripheralOnly. Default reconnect mode is DirectedKnock.
 - Accessories expose at least two Bond Table slots; eight is recommended; no silent eviction.
 - GATT Management Service is post-bond only and optional for a first reference implementation.
@@ -101,6 +104,11 @@ The module under test is the Stealth Bonding state machine. Prior art in this re
 - Full Bond Table → new pair refused.
 - Factory reset → Unprovisioned and Public Advertising allowed again.
 - Registration without factory attestation → fail; no Bond Passkey.
+- Attestation that omits the LE SC transcript → fail.
+- Forged per-unit certificate → fail.
+- Two Accessories with the same Local Name → different Enrollment scan rows.
+- Far Accessory under a closeness threshold → fail.
+- Silent audio Accessory when the Host requires acoustic → fail.
 - Replayed attestation nonce → fail.
 - Assertion reconnect → success.
 - Replayed assertion challenge → fail; still not public.

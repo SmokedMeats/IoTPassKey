@@ -13,7 +13,7 @@ Do not mix these. They ship on different timelines.
 | Piece | Job | Who must implement it | What a normal phone pair proves today |
 | --- | --- | --- | --- |
 | **Stealth Commitment** | Leave Public Advertising or fail the pair | Accessory firmware + a little Host policy | **Yes** — Development Kit + laptop + second phone scan list |
-| **Bond Passkey** | Host-vault public-key credential. Factory attestation at enroll. Fresh challenge + signature at reconnect. User does not see a passkey sheet. | Host operating-system vault (or a test stand-in) **and** the Accessory | **No.** Pairing from Settings is still Just Works. That is not a passkey test. |
+| **Bond Passkey** | Host-vault public-key credential. Per-unit factory cert under a Manufacturer Root. Attestation covers the Low Energy Secure Connections transcript. Fresh challenge + signature at reconnect. User does not see a passkey sheet. | Host operating-system vault (or a test stand-in) **and** the Accessory | **No.** Pairing from Settings is still Just Works. That is not a passkey test. |
 
 The old line “the Bond Passkey is only bookkeeping” is **false** under the corrected model. Attestation and assertion are real cryptography. The hide is still the only thing a stranger notices.
 
@@ -27,10 +27,10 @@ There is no iPhone or Android silent-vault ceremony to point at. Test in layers.
 
 | Layer | Setup | Proves | Does not prove |
 | --- | --- | --- | --- |
-| **0. Simulator** | In-process Host + Accessory in `sim/`. Real P-256 sign/verify fixtures (factory key + vault key). | Attestation required; replayed nonce fails; assertion reconnect; synced Host (same credential id) skips Enrollment Window; stranger cannot; scan-list / commitment tests still pass. | Radio, a real operating-system vault. |
+| **0. Simulator** | In-process Host + Accessory in `sim/`. Real P-256 sign/verify fixtures (manufacturer root, per-unit cert, vault key). | Attestation required and must cover stubbed SC public keys; forged unit cert fails; replayed nonce fails; assertion reconnect; synced Host (same credential id) skips Enrollment Window; stranger cannot; same Local Name still yields unique scan rows; scan-list / commitment tests still pass. | Radio, a real operating-system vault, a real microphone acoustic check. |
 | **1. File-vault test Host** | Small Linux or Rust Host. Key pair on disk. No WebAuthn dialog. Talks to a second process or a board. | PDUs on a link we control. Accessory rejects bad attestation. Host assertion is checked. | iCloud / Google / Windows silent pair. |
 | **2. Development Kit hide** | Current Zephyr app + a normal laptop. See [`nrf52840-dk-setup.md`](nrf52840-dk-setup.md). | Scan list empties. Filmable. Label it “Generic Access Profile hide only.” | The Bond Passkey. |
-| **3. Kit + test Host** | nRF Accessory with a **test** factory key; Linux file vault. Optional second kit as central. | First on-air attestation + assertion. | Platform vault sync. |
+| **3. Kit + test Host** | nRF Accessory with a **test** per-unit cert under a test manufacturer root; Linux file vault. Optional second kit as central. | First on-air attestation + assertion. | Platform vault sync. |
 | **4. BlueZ** | Host stack once PDUs are stable. | A real Host shape. | Consumer phone vault. |
 | **5. Phone OS** | Only when a vendor implements silent Bluetooth-pairing vault create/assert. | The product as imagined. | — |
 
@@ -93,11 +93,11 @@ Optimize for a **correct oracle**, then a **hide video**, then a **test Host** t
 
 | Phase | Work | Stop if |
 | --- | --- | --- |
-| **A** | Simulator: attestation, assertion, sync vs stranger, stealth. | Tests only pass by stubbing “always ok.” |
+| **A** | Simulator: per-unit cert, SC-transcript attestation, assertion, sync vs stranger, unique scan rows, stealth. | Tests only pass by stubbing “always ok.” |
 | **B** | nRF hide demo. Film: laptop pairs, second phone list empty. | Hide fails on a real scan list. |
 | **C** | File-vault test Host + Accessory (process or kit). | We cannot check an assertion without a phone OS (then the design is stuck). |
 | **D** | BlueZ or userspace Host with that vault. | Maintainers refuse unknown opcodes or a vault hook. |
-| **E** | Zephyr Accessory sample (test factory key, verify assertions, hide). | — |
+| **E** | Zephyr Accessory sample (test per-unit cert, verify assertions, hide). | — |
 | **F** | One room OEM for hide. Mention passkey only with a Linux/test Host. | They only wanted hide. |
 | **G** | SIG after D+E+F. Then Android/Windows silent ceremony. Apple last. | We went to SIG with only a hide demo. |
 

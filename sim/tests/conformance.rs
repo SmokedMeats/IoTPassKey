@@ -334,6 +334,59 @@ fn registration_fails_when_host_cannot_verify_attestation() {
 }
 
 #[test]
+fn registration_fails_when_attestation_omits_sc_transcript() {
+    let mut accessory = Accessory::that_omits_sc_from_attestation();
+    let mut host = Host::new();
+    accessory.open_enrollment().expect("enrollment");
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("sc");
+    assert_eq!(error, PairingError::AttestationFailed);
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
+fn registration_fails_with_forged_unit_cert() {
+    let mut accessory = Accessory::with_forged_unit_cert();
+    let mut host = Host::new();
+    accessory.open_enrollment().expect("enrollment");
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("cert");
+    assert_eq!(error, PairingError::AttestationFailed);
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
+fn enrollment_scan_rows_differ_when_local_names_match() {
+    let first = Accessory::new();
+    let second = Accessory::with_identity([0x22, 0, 0, 0, 0, 0x03], 8);
+
+    assert_eq!(first.local_name(), second.local_name());
+    assert_ne!(first.enrollment_scan_row(), second.enrollment_scan_row());
+}
+
+#[test]
+fn closeness_threshold_rejects_a_far_accessory() {
+    let mut accessory = Accessory::that_is_far_away();
+    let mut host = Host::that_requires_closeness(-50);
+    accessory.open_enrollment().expect("enrollment");
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("far");
+    assert_eq!(error, PairingError::ClosenessFailed);
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
+fn acoustic_check_rejects_a_silent_audio_accessory() {
+    let mut accessory = Accessory::without_acoustic();
+    let mut host = Host::that_requires_acoustic();
+    accessory.open_enrollment().expect("enrollment");
+
+    let error = pair(&mut host, &mut accessory, PairingOffer::default()).expect_err("silent");
+    assert_eq!(error, PairingError::AcousticFailed);
+    assert!(accessory.bond_ids().is_empty());
+}
+
+#[test]
 fn registration_fails_on_replayed_attestation_nonce() {
     let mut accessory = Accessory::new();
     let mut host = Host::new();

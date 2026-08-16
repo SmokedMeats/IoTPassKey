@@ -15,7 +15,7 @@ Every abbreviation is written out the first time it appears. Project terms (Stea
 
 **Stealth Bonding** is the protocol: a Bluetooth pairing mode. Two devices that both support it:
 
-1. Create a **Bond Passkey**: the Host vault holds the private key; the Accessory stores the public key. First pair is bound by a **Factory Attestation Key** and a fresh nonce. Later reconnect is an **Assertion** (sign a new challenge). The user does not see or click a passkey.
+1. Create a **Bond Passkey**: the Host vault holds the private key; the Accessory stores the public key. First pair is bound by a **per-unit Factory Attestation Key**, a **Manufacturer Root** on the Host, and a signature over the Low Energy Secure Connections transcript plus a fresh nonce. Later reconnect is an **Assertion** (sign a new challenge). The user does not see or click a passkey.
 2. Encrypt the radio with Low Energy Secure Connections (the link cipher, not the trust root).
 3. Change the radio so the Accessory is no longer on a normal scan list (**Stealth Commitment**).
 
@@ -101,13 +101,13 @@ An **opcode** is the first byte of an SMP command that says which message this i
 
 Bluetooth pairing is a conversation on the Security Manager Protocol (SMP). The Core Spec already owns opcodes `0x01` through `0x0E` (Pairing Request, Pairing Response, public keys, confirm, and so on).
 
-Our spec inserts **Phase 1b** after “shall we pair with Low Energy Secure Connections?” and before the link cryptography:
+Our spec inserts **Phase 1b** after “shall we pair with Low Energy Secure Connections?” and **before** the link public-key exchange. Attestation (`0xF2`) waits until **after** that exchange so the factory signature can cover both sides’ Secure Connections public keys:
 
 | Opcode | PDU name | Meaning |
 | --- | --- | --- |
 | `0xF0` | Stealth Bonding Params | “I want this Stealth Policy, this reconnect mode, this many bonds.” |
 | `0xF1` | Stealth Bonding Params Response | “I accept those values” (or this mode fails). |
-| `0xF2` | Attestation | Factory Attestation Key signs transcript + Host nonce. |
+| `0xF2` | Attestation | Per-unit cert plus Factory Attestation Key over the LE SC transcript + Host nonce. |
 | `0xF3` | Register | Host sends `credential_id` and public key. |
 
 They are **draft placeholders**, not numbers assigned by the Bluetooth Special Interest Group. A phone, laptop, or stock **BlueZ** (the usual Linux Bluetooth host stack) does not send or understand them.
@@ -121,8 +121,9 @@ If either side does not send or accept these PDUs, Stealth Bonding aborts. Ordin
 | Phase | What happens |
 | --- | --- |
 | 1 | Pairing Request / Response: agree on Low Energy Secure Connections and bonding |
-| 1b | Params (`0xF0`/`0xF1`), factory attestation (`0xF2`), silent vault create, register (`0xF3`) |
+| 1b | Params (`0xF0`/`0xF1`) and Host nonce only. No attestation yet. |
 | 2 | Public-key exchange (LE Secure Connections — link cipher) |
+| 2b | Per-unit cert + attestation (`0xF2`) over the SC transcript and nonce; silent vault create; register (`0xF3`) |
 | 3 | Key distribution (LTK, identity, optional Identity Resolving Key) |
 | 4 | **Stealth Commitment** — change advertising; only then report success |
 
@@ -136,7 +137,7 @@ Keys in Phase 3 are **tentative**. They become a Bond Passkey only after Phase 4
 
 The pairing engine lives in Zephyr’s Bluetooth host stack (`subsys/bluetooth/host/smp.c`), not in our application. Incoming SMP packets are dispatched from a fixed `handlers[]` table. Unknown opcodes are dropped as reserved. There is no application programming interface to register a new SMP opcode.
 
-So `0xF0` / `0xF1` cannot be added in `firmware/accessory` alone. Someone would change Zephyr itself (a **west** overlay or a private Zephyr branch), extend that table, and splice Phase 1b into the pairing sequence. **west** is Zephyr’s workspace tool: it clones Zephyr and modules next to this git tree.
+So `0xF0` / `0xF1` cannot be added in `firmware/accessory` alone. Someone would change Zephyr itself (a **west** overlay or a private Zephyr branch), extend that table, and splice Phase 1b (params) plus Phase 2b (attestation after the Secure Connections public keys) into the pairing sequence. **west** is Zephyr’s workspace tool: it clones Zephyr and modules next to this git tree.
 
 That is a stack fork, not an app feature.
 
@@ -262,7 +263,8 @@ Project terms (full definitions and forbidden synonyms): [`CONTEXT.md`](../CONTE
 | Assertion | Host signs a fresh challenge with the vault key |
 | Bond Passkey | Host-vault public-key credential; Accessory stores the public key |
 | Bond Table | Accessory store of public keys and policy (not the Filter Accept List) |
-| Factory Attestation Key | Manufacture-time Accessory signing key; does not rotate |
+| Factory Attestation Key | Per-unit manufacture-time Accessory signing key; does not rotate |
+| Manufacturer Root | Brand public key on the Host; verifies each unit certificate |
 | BlueZ | Common Linux Bluetooth host stack |
 | CI | Continuous integration — automated build/test |
 | Controller | Bluetooth radio + Link Layer |

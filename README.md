@@ -26,7 +26,7 @@ This is a protocol (SMP + GAP), not an app. Devices get it from firmware and OS 
 | Reconnect | Directed Knock |
 | First-pair UX | Existing pairing button; Host is the screen |
 | Extra Hosts | Another button hold, or Delegated Enrollment |
-| Crypto | Host-vault Bond Passkey + factory attestation; LE Secure Connections is the link cipher |
+| Crypto | Host-vault Bond Passkey + per-unit factory attestation over the LE SC transcript; LE Secure Connections is the link cipher |
 
 ## Firmware
 

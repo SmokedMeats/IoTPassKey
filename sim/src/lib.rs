@@ -1,8 +1,9 @@
 //! Stealth Bonding PDU simulator.
 //!
 //! Public seam: pairing, advertising visibility, and the Bond Table.
-//! Factory attestation and vault assertions are real P-256 signatures.
-//! Low Energy Secure Connections link math is stubbed; Params PDUs are real bytes.
+//! Per-unit factory certificates, transcript-bound attestation (including stubbed
+//! Low Energy Secure Connections public keys), and vault assertions are real P-256
+//! signatures. Link math stays stubbed; Params PDUs are real bytes.
 
 #![forbid(unsafe_code)]
 

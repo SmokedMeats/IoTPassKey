@@ -17,7 +17,7 @@ This document is the normative specification. Domain terms match `CONTEXT.md`. A
 
 Stealth Bonding is a Bluetooth pairing mode. Two devices that both support it create a **Bond Passkey** (a Host-vault public-key credential; the Accessory stores the public key), encrypt the link with Low Energy Secure Connections, and then apply a **Stealth Commitment**: the Accessory (and, if negotiated, the Host) leaves **Public Advertising**. A normal operating-system scan list SHALL NOT show the Accessory as a named or anonymous device.
 
-The user does not see or click a passkey. Gestures are the Accessory’s existing pairing button and the Host’s normal Bluetooth device list. First enrollment is bound by a **Factory Attestation Key** and a fresh Host nonce. Later reconnect is an **Assertion** over a new challenge.
+The user does not see or click a passkey. Gestures are the Accessory’s existing pairing button and the Host’s normal Bluetooth device list. First enrollment is bound by a **per-unit Factory Attestation Key**, a **Manufacturer Root** on the Host, and a signature that covers the Low Energy Secure Connections transcript plus a fresh Host nonce. Later reconnect is an **Assertion** over a new challenge.
 
 The mode is designed for screenless Accessories that already have a pairing button and an LED. It does not require new hardware. A device may hold multiple Bond Passkeys. A Host that already holds a synced vault credential for this Accessory reconnects without a new Enrollment Window. Additional strangers are enrolled through the same pairing gesture or through **Delegated Enrollment** from an already-bonded Host.
 
@@ -37,7 +37,7 @@ WebAuthn/FIDO passkeys are a credential model for authenticators. This mode uses
 
 The gap is a standardized pairing mode that:
 
-1. Creates a Bond Passkey: Host vault private key, Accessory public key, factory attestation at enroll, assertion at reconnect.
+1. Creates a Bond Passkey: Host vault private key, Accessory public key, per-unit factory attestation over the Low Energy Secure Connections transcript at enroll, assertion at reconnect.
 2. Forces the Accessory out of Public Advertising when pairing succeeds.
 3. Still allows bonded Hosts to reconnect without Public Advertising.
 4. Works on devices that will not be redesigned, with only the existing pair button.
@@ -113,7 +113,9 @@ Additional terms used only in this specification:
 
 **Host stack.** The Bluetooth host implementation on either device (not the Stealth Bonding Host role).
 
-**Factory Attestation Key.** The Accessory’s manufacture-time signing key (see `CONTEXT.md`).
+**Factory Attestation Key.** The Accessory’s per-unit manufacture-time signing key (see `CONTEXT.md`).
+
+**Manufacturer Root.** The public key the Host trusts for a brand. It verifies per-unit factory certificates. It is not the unit’s attestation key.
 
 **Host Vault.** The Host store of Bond Passkey private keys.
 
@@ -220,7 +222,7 @@ Each Bond Passkey is independent. Revoking one MUST NOT revoke the others.
 
 ### 5.3 Lifetime
 
-A Bond Passkey is created only after Stealth Commitment succeeds (Section 9.6).
+A Bond Passkey is created only after Stealth Commitment succeeds (Section 9.7).
 
 A Bond Passkey ends when:
 
@@ -341,7 +343,7 @@ Until Bluetooth SIG assigned numbers exist, implementations of this draft SHALL 
 - **SMP feature bit** in the Stealth Bonding Params PDU (Section 9.3)
 - **LE Features** bit: unassigned; implementations MAY use a manufacturer-specific HCI feature flag locally
 
-A Host that sees `SB_SERVICE_UUID` in Enrollment advertising SHOULD offer Stealth Bonding as the preferred pairing mode.
+A Host that sees `SB_SERVICE_UUID` in Enrollment advertising SHOULD offer Stealth Bonding as the preferred pairing mode. The Host MUST disambiguate the scan row as specified in Section 9.11.
 
 An Accessory in `BondedKnock` or `BondedSilent` MUST NOT include `SB_SERVICE_UUID` in any Public Advertising, because it MUST NOT perform Public Advertising.
 
@@ -349,7 +351,7 @@ An Accessory in `BondedKnock` or `BondedSilent` MUST NOT include `SB_SERVICE_UUI
 
 ## 9. Pairing procedure
 
-Stealth Bonding is factory attestation, Host-vault registration, Low Energy Secure Connections for the link, and Stealth Commitment. Just Works is not the trust root.
+Stealth Bonding is per-unit factory attestation over the Low Energy Secure Connections transcript, Host-vault registration, the LE SC link cipher, and Stealth Commitment. Just Works is not the trust root. Attestation MUST NOT run before Phase 2 public-key exchange.
 
 ```mermaid
 sequenceDiagram
@@ -361,11 +363,13 @@ sequenceDiagram
     H->>A: Pairing Request (SC, bonding)
     A->>H: Pairing Response
     H->>A: Stealth Bonding Params plus Host nonce
-    A->>H: Params Response plus attestation over transcript and nonce
-    H->>H: Verify factory attestation
+    A->>H: Params Response
+    Note over H,A: LE SC Phase 2 (public keys, DHKey)
+    A->>H: Per-unit cert plus attestation over SC transcript and nonce
+    H->>H: Verify cert under Manufacturer Root, then attestation
     V->>V: Create Bond Passkey silently
     H->>A: Register credential id and public key
-    Note over H,A: LE SC Phase 2 and 3 (link cipher)
+    Note over H,A: LE SC Phase 3 (key distribution)
     Note over A: Stealth Commitment
     A->>A: Stop Public Advertising
     A->>H: Pairing Complete (only after commitment)
@@ -392,19 +396,16 @@ Devices SHALL exchange SMP Pairing Request / Pairing Response with:
 
 LE Legacy Pairing MUST NOT be used for Stealth Bonding. If either side would fall back to Legacy Pairing, Stealth Bonding SHALL be aborted.
 
-I/O capability mapping is in Section 13. The user-visible association remains the existing pair button and Host device list. Numeric Comparison, typed Passkey Entry, QR, and NFC SHALL NOT be required. Just Works MAY run as the Low Energy Secure Connections association model; it MUST NOT be treated as proof that the Accessory is genuine. That proof is factory attestation (Section 9.3).
+I/O capability mapping is in Section 13. The user-visible association remains the existing pair button and Host device list. Numeric Comparison, typed Passkey Entry, QR, and NFC SHALL NOT be required. Just Works MAY run as the Low Energy Secure Connections association model; it MUST NOT be treated as proof that the Accessory is genuine. That proof is per-unit factory attestation over the LE SC transcript (Section 9.5).
 
-### 9.3 Phase 1b — Params, attestation, and registration
+### 9.3 Phase 1b — Params and nonce
 
 After a successful pairing feature exchange that selected LE SC and bonding, and before Phase 2 public-key exchange:
 
 1. The Host SHALL send `Stealth Bonding Params` including a 32-octet random **nonce**. The Host SHALL reject a repeated nonce from a prior attempt with this Accessory (replay).
-2. The Accessory SHALL reply with `Stealth Bonding Params Response` and an **attestation**: a P-256 ECDSA signature by the Factory Attestation Key over the pairing transcript (at least: Host identity, Accessory identity, accepted policy, reconnect mode, and the Host nonce).
-3. The Host SHALL verify the attestation against the manufacturer public key it trusts for this model. If verification fails, or the Host cannot verify attestation, Stealth Bonding SHALL be aborted. Ordinary pairing MAY proceed instead; that MUST NOT create a Bond Passkey.
-4. The Host Vault SHALL create a Bond Passkey **silently** (no passkey sheet). If this Host already holds a `credential_id` for this Accessory’s relying-party id (synced vault), it SHALL reuse that credential and MUST NOT require a new Enrollment Window on a later reconnect.
-5. The Host SHALL send the `credential_id` and public key to the Accessory. The Accessory SHALL store them tentatively until Stealth Commitment.
+2. The Accessory SHALL reply with `Stealth Bonding Params Response` only. It MUST NOT attest yet. The Low Energy Secure Connections public keys do not exist until Phase 2.
 
-If either side does not send or accept Params, attestation, or registration, Stealth Bonding SHALL be aborted.
+If either side does not send or accept Params, Stealth Bonding SHALL be aborted.
 
 #### 9.3.1 `Stealth Bonding Params` (SMP command, draft opcode `0xF0`)
 
@@ -418,7 +419,7 @@ If either side does not send or accept Params, attestation, or registration, Ste
 | 5 | 1 | max_bonds | Sender’s Bond Table capacity (1–255) |
 | 6 | 2 | reserved | MUST be 0 |
 
-Nonce, attestation, and registration SHALL be sent as additional draft SMP commands (`0xF2` Attestation, `0xF3` Register). The 8-octet Params body is unchanged so existing draft traces stay valid. The normative requirement is the signed bytes and the verify/register steps, not a final opcode assignment.
+Nonce, attestation, and registration SHALL be sent as additional draft SMP commands (`0xF2` Attestation, `0xF3` Register). The 8-octet Params body is unchanged so existing draft traces stay valid. The normative requirement is the signed bytes, the order in this section, and the verify/register steps, not a final opcode assignment.
 
 #### 9.3.2 `Stealth Bonding Params Response` (draft opcode `0xF1`)
 
@@ -432,9 +433,29 @@ Reserved bits MUST be ignored on receipt and MUST be zero on send.
 
 Devices SHALL perform Low Energy Secure Connections Phase 2 as specified in the Core Spec (public key exchange, DHKey, authentication stage 1 and 2).
 
-This specification does not change those primitives. They encrypt the link. They do not replace factory attestation or the Bond Passkey.
+This specification does not change those primitives. They encrypt the link. They do not replace factory attestation or the Bond Passkey. The two Phase 2 public keys SHALL be included in the attestation transcript (Section 9.5).
 
-### 9.5 Phase 3 — key distribution
+### 9.5 Phase 2b — Per-unit attestation and registration
+
+After Phase 2 public-key exchange, and before Stealth Commitment:
+
+1. The Accessory SHALL send its **per-unit factory certificate** and an **attestation**: a P-256 ECDSA signature by that unit’s Factory Attestation Key over the pairing transcript. The signed bytes MUST include at least: Host identity, Accessory identity, accepted policy, reconnect mode, the Host nonce, the Host’s LE SC public key, and the Accessory’s LE SC public key. An attestation that omits either public key is non-conformant.
+2. The Host SHALL verify the unit certificate under a **Manufacturer Root** it already trusts for this brand (Section 9.5.1). It SHALL then verify the attestation under the unit public key from that certificate. If either check fails, or the Host has no trusted root for this Accessory, Stealth Bonding SHALL be aborted. Ordinary pairing MAY proceed instead; that MUST NOT create a Bond Passkey.
+3. An audio Accessory SHOULD complete the automatic acoustic check (Section 9.9). A Host MAY apply a closeness threshold (Section 9.10).
+4. The Host Vault SHALL create a Bond Passkey **silently** (no passkey sheet). If this Host already holds a `credential_id` for this Accessory’s relying-party id (synced vault), it SHALL reuse that credential and MUST NOT require a new Enrollment Window on a later reconnect.
+5. The Host SHALL send the `credential_id` and public key to the Accessory. The Accessory SHALL store them tentatively until Stealth Commitment.
+
+If either side does not send or accept attestation or registration, Stealth Bonding SHALL be aborted.
+
+#### 9.5.1 Per-unit factory certificate
+
+Each Accessory unit MUST have its own Factory Attestation Key and a certificate that binds that unit’s public key to a unique serial. The Host MUST trust a Manufacturer Root (or a short chain ending at one) and MUST NOT treat a single shared model key as sufficient.
+
+A stolen unit key enrolls only that unit’s identity. A stolen Manufacturer Root is a brand-wide incident; products MUST be able to revoke or rotate roots on the Host.
+
+The certificate serial is also the source of the Enrollment scan-row suffix (Section 9.11).
+
+### 9.6 Phase 3 — key distribution
 
 Devices SHALL distribute at least:
 
@@ -444,7 +465,7 @@ Devices SHALL distribute at least:
 
 Keys are held tentatively until Stealth Commitment succeeds.
 
-### 9.6 Phase 4 — Stealth Commitment
+### 9.7 Phase 4 — Stealth Commitment
 
 After Phase 3 succeeds, each device SHALL apply the negotiated Stealth Policy to its own radio.
 
@@ -464,9 +485,27 @@ If the Controller cannot leave Public Advertising, the Accessory SHALL:
 
 A Host MUST NOT present “Connected / Paired” as a Stealth Bonding success until it has received pairing completion after commitment. If the Accessory drops the procedure, the Host SHALL delete tentative keys.
 
-### 9.7 Abort
+### 9.8 Abort
 
 On any failure after tentative key storage, both sides SHALL erase those keys. Partial Bond Passkeys MUST NOT remain.
+
+### 9.9 Acoustic check (audio products)
+
+An Accessory that can play sound SHOULD, during first enrollment, emit a short tone or ultrasonic sequence derived from the same transcript the attestation covers (at least the Host nonce and both LE SC public keys). The Host SHOULD verify that sequence on its microphone. The check MUST be automatic. It MUST NOT add a sheet, code, or extra tap.
+
+If the Host implements this check and verification fails, Stealth Bonding SHALL be aborted. Products without a speaker are not required to implement it. Success proves the radio peer is the object making sound in the room; it does not identify which of two same-model speakers the user meant if both are playing.
+
+### 9.10 Closeness threshold
+
+A Host MAY refuse Stealth Bonding during an Enrollment Window if the measured signal strength is below a product-defined threshold. This is a convenience filter. It is not authentication. A same-room attacker still satisfies it.
+
+### 9.11 Enrollment scan row
+
+The Bluetooth Local Name MAY be a product name shared by many units. Anyone can advertise any Local Name; the radio has no uniqueness authority. This specification therefore MUST NOT require globally unique advertised names.
+
+A Host MUST NOT present two Enrollment advertisements as the same row. The Host SHALL render the ordinary product name plus a short unique suffix derived from the per-unit certificate serial (for example the last four hexadecimal digits). The Accessory SHOULD print that same suffix on the unit or packaging.
+
+Unique rows remove identical twins from the list. They do not bind the user to the object in their hand. A lookalike suffix, a suffix the user ignores, or a different tempting name still works. See Section 16.
 
 ---
 
@@ -574,10 +613,12 @@ This specification MUST NOT require Passkey Entry, numeric comparison, QR codes,
 
 The Host SHOULD show, in ordinary Bluetooth or forgotten-device UI (not a passkey ceremony):
 
-- the Accessory’s advertised name during Enrollment,
+- the Enrollment scan row (product name plus per-unit suffix, Section 9.11),
 - a named bond (“Kitchen speaker”) after success,
 - the Stealth Policy (default PeripheralOnly, not a required extra step),
 - later, a list of Bond Passkeys for revocation.
+
+The Host MUST NOT collapse two Enrollment advertisements that share a Local Name into one row.
 
 ---
 
@@ -614,9 +655,13 @@ This service MUST NOT start pairing and MUST NOT be the mechanism that applies S
 
 ## 16. Security considerations
 
-**Just Works is not the trust root.** Low Energy Secure Connections association MAY be Just Works. A Bond Passkey MUST NOT be created unless factory attestation over the transcript and Host nonce verifies. A Host that cannot verify attestation MUST refuse Stealth Bonding.
+**Just Works is not the trust root.** Low Energy Secure Connections association MAY be Just Works. A Bond Passkey MUST NOT be created unless a per-unit factory certificate verifies under a Manufacturer Root and the unit attestation covers the Low Energy Secure Connections transcript plus the Host nonce. A Host that cannot verify attestation MUST refuse Stealth Bonding.
 
-**Factory attestation residual.** Attestation proves “genuine device of this model,” not “the Accessory in the user’s hand.” A cloned Accessory that holds a stolen Factory Attestation Key can still enroll. Instance-level man-in-the-middle resistance would need a user-visible unique confirm or a physical out-of-band channel; this specification forbids those on the default path and MUST state this residual.
+**Per-unit certificate residual.** Attestation proves “this unit’s key, certified by a brand the Host trusts,” not “the object the user meant to tap.” A stolen unit key enrolls that unit. A stolen Manufacturer Root is brand-wide.
+
+**Same-room evil twin.** Two genuine units, or a genuine unit and a lookalike advertisement, can sit in the same room during an Enrollment Window. Unique scan-row suffixes (Section 9.11) mean those rows cannot be identical. Acoustic check (Section 9.9) and closeness (Section 9.10) can reject a silent or distant peer. A same-room evil twin remains residual unless the user notices which row they tapped and, if the suffix is printed on the unit, checks it. Forbidding two devices from advertising the same Local Name does not close this: the radio cannot enforce name uniqueness, and an attacker can use a lookalike or a different tempting name.
+
+**Transcript coverage.** An attestation that is signed before Phase 2, or that omits either LE SC public key, does not bind the factory key to the link being formed. That order is non-conformant.
 
 **Freshness, not one-time passwords.** Nonces and reconnect challenges MUST be random (or a monotonic counter included in the signed bytes). Implementations MUST NOT use time-based one-time passwords or short rotating digits as the recognizer.
 
@@ -626,7 +671,7 @@ This service MUST NOT start pairing and MUST NOT be the mechanism that applies S
 
 **Enrollment Window is still sensitive.** Products SHOULD require a physical gesture for the first Bond Passkey from a stranger. A Host that already holds a synced `credential_id` does not need a new window. Delegated Enrollment MUST require a live Assertion.
 
-**Commitment failure.** Reporting success while still publicly advertising would be a false security property. Section 9.6 forbids that.
+**Commitment failure.** Reporting success while still publicly advertising would be a false security property. Section 9.7 forbids that.
 
 **Key storage.** The Host Vault private key MUST be stored with the same protection the platform uses for other passkeys. The Accessory public key is not secret; the LTK still is. Home-grown *link* math is not conformant.
 
@@ -668,10 +713,10 @@ This is the same rollout path as other Core Spec features.
 A device claiming Stealth Bonding support SHALL:
 
 1. Verify Host Assertions with stored public keys. Reject replayed challenges.
-2. Attest first enrollment with the Factory Attestation Key over transcript plus Host nonce.
+2. Attest first enrollment with a per-unit Factory Attestation Key over the Low Energy Secure Connections transcript plus Host nonce. Present a unit certificate that verifies under a Manufacturer Root.
 3. Implement Low Energy Secure Connections as the link cipher for this mode.
 4. Implement the advertising states in Section 7.
-5. Apply Stealth Commitment before reporting success (Section 9.6).
+5. Apply Stealth Commitment before reporting success (Section 9.7).
 6. Refuse to call a bond Stealth Bonding if Public Advertising is still active when policy requires it off.
 7. Support at least two Bond Passkeys on Accessories.
 8. Open Enrollment only via the existing pairing gesture or Delegated Enrollment (synced vault Hosts excepted, Section 11).
@@ -679,11 +724,12 @@ A device claiming Stealth Bonding support SHALL:
 
 A Host claiming support SHALL:
 
-1. Verify factory attestation or refuse Stealth Bonding.
+1. Trust a Manufacturer Root; verify the per-unit certificate and the transcript-bound attestation, or refuse Stealth Bonding.
 2. Create and assert Bond Passkeys silently in the Host Vault.
 3. Prefer this mode when the Accessory indicates it.
-4. Provide ordinary Bluetooth UI for success, failure, names, and revocation — not a passkey sheet.
+4. Provide ordinary Bluetooth UI for success, failure, names, and revocation — not a passkey sheet. Disambiguate Enrollment rows (Section 9.11).
 5. Implement Directed Knock initiation using stored identity.
+6. Audio Hosts SHOULD run the automatic acoustic check (Section 9.9). Hosts MAY apply a closeness threshold (Section 9.10).
 
 ---
 
@@ -707,7 +753,7 @@ These values are provisional for independent implementations of this draft. They
 | `SB_SERVICE_UUID` | `8b2e5c10-4f3a-4a91-9c6d-1e7a0b2d4f50` | Feature discovery and Management Service (random 128-bit; not a SIG 16-bit alias) |
 | SMP opcode Params | `0xF0` | Vendor/draft command space |
 | SMP opcode Params Response | `0xF1` | Vendor/draft command space |
-| SMP opcode Attestation | `0xF2` | Factory signature over transcript + nonce |
+| SMP opcode Attestation | `0xF2` | Per-unit cert plus signature over LE SC transcript + nonce |
 | SMP opcode Register | `0xF3` | Host `credential_id` + public key |
 | Company identifier | Unassigned | Not required for this draft |
 
@@ -730,9 +776,9 @@ Independent implementations SHOULD be prepared to configure UUIDs and opcodes.
 **Pair a speaker to a laptop, speaker hidden, laptop shown.**
 
 1. User holds the speaker’s existing Bluetooth button. LED blinks. Enrollment Window opens.
-2. Laptop shows “Kitchen Speaker” in the Bluetooth list.
-3. User selects it. Both sides support Stealth Bonding. Policy defaults to PeripheralOnly, reconnect DirectedKnock.
-4. Laptop sends a fresh nonce. Speaker attests with its Factory Attestation Key. Laptop verifies, creates a Bond Passkey in the vault silently, and registers the public key. Low Energy Secure Connections encrypts the link.
+2. Laptop shows “Kitchen Speaker · 7C21” (product name plus the per-unit suffix printed on the speaker).
+3. User selects that row. Both sides support Stealth Bonding. Policy defaults to PeripheralOnly, reconnect DirectedKnock.
+4. Laptop sends a fresh nonce. Both sides run Low Energy Secure Connections Phase 2. The speaker presents its unit certificate and attests over the SC transcript plus nonce. The laptop verifies the cert under the manufacturer root, optionally hears the automatic acoustic check, creates a Bond Passkey in the vault silently, and registers the public key.
 5. Keys are stored tentatively. Speaker stops all undirected advertising and starts Directed Knock to the laptop. Commitment succeeds.
 6. Laptop shows paired. Another phone’s Bluetooth scan shows nothing — no name, no anonymous blip.
 7. Laptop reconnects later via Directed Knock. A sniffer next to the speaker may still see directed packets.

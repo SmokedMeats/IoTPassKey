@@ -6,9 +6,11 @@ pub type Secret = [u8; 32];
 pub type PublicKeyBytes = [u8; 33];
 pub type SignatureBytes = [u8; 64];
 pub type Nonce = [u8; 32];
+pub type UnitSerial = [u8; 8];
+pub type ScPublic = [u8; 32];
 
-/// Valid P-256 scalar used as the default Factory Attestation Key in tests.
-pub const DEFAULT_FACTORY_SECRET: Secret = [
+/// Manufacturer root used to sign per-unit factory certificates in tests.
+pub const DEFAULT_MANUFACTURER_SECRET: Secret = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
 ];
 
@@ -39,19 +41,62 @@ pub fn verify(public: &PublicKeyBytes, message: &[u8], signature: &SignatureByte
     key.verify(message, &parsed).is_ok()
 }
 
+pub fn unit_secret_from_identity(identity: [u8; 6]) -> Secret {
+    let mut secret = [0u8; 32];
+    secret[0] = 0x03;
+    secret[26..32].copy_from_slice(&identity);
+    secret
+}
+
+pub fn unit_serial_from_identity(identity: [u8; 6]) -> UnitSerial {
+    let mut serial = [0u8; 8];
+    serial[2..8].copy_from_slice(&identity);
+    serial
+}
+
+pub fn unit_serial_suffix(serial: &UnitSerial) -> String {
+    format!("{:02X}{:02X}", serial[6], serial[7])
+}
+
+pub fn unit_cert_message(unit_public: &PublicKeyBytes, serial: &UnitSerial) -> Vec<u8> {
+    let mut message = Vec::with_capacity(33 + 8);
+    message.extend_from_slice(unit_public);
+    message.extend_from_slice(serial);
+    message
+}
+
+pub fn issue_unit_cert(unit_public: &PublicKeyBytes, serial: &UnitSerial) -> SignatureBytes {
+    sign(
+        &DEFAULT_MANUFACTURER_SECRET,
+        &unit_cert_message(unit_public, serial),
+    )
+}
+
+/// Stubbed Low Energy Secure Connections public-key bytes for the attestation transcript.
+pub fn fixture_sc_public(identity: [u8; 6]) -> ScPublic {
+    let mut out = [0u8; 32];
+    out[0] = 0x5C;
+    out[26..32].copy_from_slice(&identity);
+    out
+}
+
 pub fn attestation_message(
     host_identity: [u8; 6],
     accessory_identity: [u8; 6],
     policy: u8,
     reconnect: u8,
     nonce: &Nonce,
+    host_sc_public: &ScPublic,
+    accessory_sc_public: &ScPublic,
 ) -> Vec<u8> {
-    let mut message = Vec::with_capacity(6 + 6 + 1 + 1 + 32);
+    let mut message = Vec::with_capacity(6 + 6 + 1 + 1 + 32 + 32 + 32);
     message.extend_from_slice(&host_identity);
     message.extend_from_slice(&accessory_identity);
     message.push(policy);
     message.push(reconnect);
     message.extend_from_slice(nonce);
+    message.extend_from_slice(host_sc_public);
+    message.extend_from_slice(accessory_sc_public);
     message
 }
 

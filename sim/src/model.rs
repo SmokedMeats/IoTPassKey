@@ -1,6 +1,8 @@
 use crate::crypto::{
-    assertion_message, attestation_message, public_key, sign, vault_secret_from_identity, verify,
-    Nonce, PublicKeyBytes, Secret, DEFAULT_FACTORY_SECRET,
+    assertion_message, attestation_message, fixture_sc_public, issue_unit_cert, public_key, sign,
+    unit_cert_message, unit_secret_from_identity, unit_serial_from_identity, unit_serial_suffix,
+    vault_secret_from_identity, verify, Nonce, PublicKeyBytes, Secret, SignatureBytes, UnitSerial,
+    DEFAULT_MANUFACTURER_SECRET,
 };
 use crate::pdu::{StealthBondingParams, PARAMS_LEN, PARAMS_OPCODE, PARAMS_RESPONSE_OPCODE};
 
@@ -119,6 +121,8 @@ pub enum PairingError {
     DelegatedConfirmRequired,
     AttestationFailed,
     AttestationReplay,
+    AcousticFailed,
+    ClosenessFailed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,6 +207,12 @@ pub struct Accessory {
     pending_authorizer: Option<BondPasskeyId>,
     delegated_confirmed: bool,
     factory_secret: Option<Secret>,
+    unit_serial: UnitSerial,
+    unit_cert: Option<SignatureBytes>,
+    product_name: String,
+    omit_sc_from_attestation: bool,
+    enrollment_rssi_dbm: i8,
+    plays_acoustic: bool,
     used_assertion_challenges: Vec<Nonce>,
     next_challenge: u32,
     replay_assertion_challenge: bool,
@@ -221,11 +231,13 @@ pub struct Host {
     ltk_override: Option<[u8; 16]>,
     vault_secret: Secret,
     credential_id: Option<BondPasskeyId>,
-    trusted_factory_public: Option<PublicKeyBytes>,
+    trusted_manufacturer_public: Option<PublicKeyBytes>,
     used_attestation_nonces: Vec<Nonce>,
     next_nonce: u32,
     replay_attestation_nonce: bool,
     last_attestation_nonce: Option<Nonce>,
+    min_enrollment_rssi_dbm: Option<i8>,
+    require_acoustic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,9 +251,16 @@ impl Accessory {
     }
 
     pub fn with_capacity(capacity: u8) -> Self {
+        Self::with_identity([0x22, 0, 0, 0, 0, 0x02], capacity)
+    }
+
+    pub fn with_identity(identity: [u8; 6], capacity: u8) -> Self {
         let capacity = capacity.max(2);
+        let unit_secret = unit_secret_from_identity(identity);
+        let unit_serial = unit_serial_from_identity(identity);
+        let unit_public = public_key(&unit_secret);
         Self {
-            identity: [0x22, 0, 0, 0, 0, 0x02],
+            identity,
             capacity,
             supports_stealth_bonding: true,
             supports_le_sc: true,
@@ -256,7 +275,13 @@ impl Accessory {
             enrollment_remaining_ms: None,
             pending_authorizer: None,
             delegated_confirmed: false,
-            factory_secret: Some(DEFAULT_FACTORY_SECRET),
+            factory_secret: Some(unit_secret),
+            unit_serial,
+            unit_cert: Some(issue_unit_cert(&unit_public, &unit_serial)),
+            product_name: "Accessory".into(),
+            omit_sc_from_attestation: false,
+            enrollment_rssi_dbm: -40,
+            plays_acoustic: true,
             used_assertion_challenges: Vec::new(),
             next_challenge: 1,
             replay_assertion_challenge: false,
@@ -285,7 +310,50 @@ impl Accessory {
     pub fn without_factory_attestation() -> Self {
         let mut accessory = Self::new();
         accessory.factory_secret = None;
+        accessory.unit_cert = None;
         accessory
+    }
+
+    pub fn that_omits_sc_from_attestation() -> Self {
+        let mut accessory = Self::new();
+        accessory.omit_sc_from_attestation = true;
+        accessory
+    }
+
+    pub fn with_forged_unit_cert() -> Self {
+        let mut accessory = Self::new();
+        let mut rogue = [0u8; 32];
+        rogue[31] = 2;
+        let unit_public = public_key(accessory.factory_secret.as_ref().expect("unit key"));
+        accessory.unit_cert = Some(sign(
+            &rogue,
+            &unit_cert_message(&unit_public, &accessory.unit_serial),
+        ));
+        accessory
+    }
+
+    pub fn that_is_far_away() -> Self {
+        let mut accessory = Self::new();
+        accessory.enrollment_rssi_dbm = -90;
+        accessory
+    }
+
+    pub fn without_acoustic() -> Self {
+        let mut accessory = Self::new();
+        accessory.plays_acoustic = false;
+        accessory
+    }
+
+    pub fn local_name(&self) -> &str {
+        &self.product_name
+    }
+
+    pub fn enrollment_scan_row(&self) -> String {
+        format!(
+            "{} · {}",
+            self.product_name,
+            unit_serial_suffix(&self.unit_serial)
+        )
     }
 
     pub fn replay_next_assertion_challenge(&mut self) {
@@ -477,17 +545,31 @@ impl Host {
             ltk_override: None,
             vault_secret: vault_secret_from_identity(identity),
             credential_id: None,
-            trusted_factory_public: Some(public_key(&DEFAULT_FACTORY_SECRET)),
+            trusted_manufacturer_public: Some(public_key(&DEFAULT_MANUFACTURER_SECRET)),
             used_attestation_nonces: Vec::new(),
             next_nonce: 1,
             replay_attestation_nonce: false,
             last_attestation_nonce: None,
+            min_enrollment_rssi_dbm: None,
+            require_acoustic: false,
         }
     }
 
     pub fn that_cannot_verify_attestation() -> Self {
         let mut host = Self::new();
-        host.trusted_factory_public = None;
+        host.trusted_manufacturer_public = None;
+        host
+    }
+
+    pub fn that_requires_closeness(min_rssi_dbm: i8) -> Self {
+        let mut host = Self::new();
+        host.min_enrollment_rssi_dbm = Some(min_rssi_dbm);
+        host
+    }
+
+    pub fn that_requires_acoustic() -> Self {
+        let mut host = Self::new();
+        host.require_acoustic = true;
         host
     }
 
@@ -634,22 +716,67 @@ pub fn pair(
         return Err(PairingError::AttestationReplay);
     }
 
+    if let Some(min_rssi) = host.min_enrollment_rssi_dbm {
+        if accessory.enrollment_rssi_dbm < min_rssi {
+            return Err(PairingError::ClosenessFailed);
+        }
+    }
+
+    let host_sc_public = fixture_sc_public(host.identity);
+    let accessory_sc_public = fixture_sc_public(accessory.identity);
+
     let Some(factory_secret) = accessory.factory_secret.as_ref() else {
         return Err(PairingError::AttestationFailed);
     };
-    let Some(trusted) = host.trusted_factory_public.as_ref() else {
+    let Some(manufacturer) = host.trusted_manufacturer_public.as_ref() else {
         return Err(PairingError::AttestationFailed);
     };
-    let transcript = attestation_message(
+    let Some(unit_cert) = accessory.unit_cert.as_ref() else {
+        return Err(PairingError::AttestationFailed);
+    };
+    let unit_public = public_key(factory_secret);
+    if !verify(
+        manufacturer,
+        &unit_cert_message(&unit_public, &accessory.unit_serial),
+        unit_cert,
+    ) {
+        return Err(PairingError::AttestationFailed);
+    }
+
+    let signed = if accessory.omit_sc_from_attestation {
+        let mut message = Vec::with_capacity(6 + 6 + 1 + 1 + 32);
+        message.extend_from_slice(&host.identity);
+        message.extend_from_slice(&accessory.identity);
+        message.push(offer.policy.code());
+        message.push(offer.reconnect.code());
+        message.extend_from_slice(&nonce);
+        message
+    } else {
+        attestation_message(
+            host.identity,
+            accessory.identity,
+            offer.policy.code(),
+            offer.reconnect.code(),
+            &nonce,
+            &host_sc_public,
+            &accessory_sc_public,
+        )
+    };
+    let expected = attestation_message(
         host.identity,
         accessory.identity,
         offer.policy.code(),
         offer.reconnect.code(),
         &nonce,
+        &host_sc_public,
+        &accessory_sc_public,
     );
-    let attestation = sign(factory_secret, &transcript);
-    if !verify(trusted, &transcript, &attestation) {
+    let attestation = sign(factory_secret, &signed);
+    if signed != expected || !verify(&unit_public, &expected, &attestation) {
         return Err(PairingError::AttestationFailed);
+    }
+    if host.require_acoustic && !accessory.plays_acoustic {
+        return Err(PairingError::AcousticFailed);
     }
     host.used_attestation_nonces.push(nonce);
     host.last_attestation_nonce = Some(nonce);
