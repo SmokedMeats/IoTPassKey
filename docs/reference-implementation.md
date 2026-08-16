@@ -34,7 +34,7 @@ Do not start a second repository for the simulator. Split later only if somethin
 | Firmware tree (Zephyr / nRF) | The board project is large and has its own SDK/vendor pins |
 | Certification / test-tool product | You are selling the badge in [`commercial.md`](commercial.md) |
 
-Until then: `docs/spec/` is the protocol; the simulator is a Rust crate under `sim/` when it exists.
+Until then: `docs/spec/` is the protocol; the simulator is a Rust crate under `sim/`; the first chip adapter is `firmware/accessory` (Zephyr 4.4, `nrf52840dk/nrf52840`).
 
 ## Language
 
@@ -51,8 +51,9 @@ The crate is `stealth-bonding-sim` in `sim/`. Integration tests live in `sim/tes
 
 ## Suggested order
 
-1. Simulator + golden PDU traces (this repo).
-2. Firmware adapter on one LE controller that already does LE Secure Connections and Limited Discoverable.
+1. Simulator + golden PDU traces (this repo) — done.
+2. Firmware adapter (`firmware/accessory`) on nRF52840 DK — GAP half on stock Zephyr 4.4.
 3. Host-stack adapter (BlueZ / Android / etc.) when the on-air format is stable.
+4. Zephyr host patch for draft SMP Params, if we want the full pairing mode on the air.
 
 Commercial products that might sit on top of that path (modules, SDK, certified badge) are listed in [`commercial.md`](commercial.md).

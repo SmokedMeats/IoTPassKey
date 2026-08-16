@@ -2,3 +2,13 @@
 **/*.rs.bk
 .idea/
 .vscode/
+
+# West / Zephyr workspace (created by `west init -l firmware`)
+.west/
+/zephyr/
+/modules/
+/bootloader/
+/tools/
+/build/
+firmware/build/
+firmware/accessory/build/

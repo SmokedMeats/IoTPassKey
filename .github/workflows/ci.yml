@@ -19,3 +19,23 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: GAP state machine
+        run: |
+          gcc -I firmware/accessory/src firmware/accessory/tests/test_gap_sm.c \
+            firmware/accessory/src/gap_sm.c -o /tmp/test_gap_sm
+          /tmp/test_gap_sm
+
+  firmware:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Setup Zephyr
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: firmware
+          toolchains: arm-zephyr-eabi
+      - name: Build Accessory
+        run: west build -p always -b nrf52840dk/nrf52840 firmware/accessory

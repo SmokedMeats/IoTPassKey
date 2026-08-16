@@ -24,6 +24,10 @@ This is a protocol (SMP + GAP), not an app. Devices get it from firmware and OS 
 | Extra Hosts | Another button hold, or Delegated Enrollment |
 | Crypto | LE Secure Connections (not a new cipher) |
 
+## Firmware
+
+Zephyr 4.4 Accessory app in [`firmware/`](firmware/). See [`firmware/README.md`](firmware/README.md). Custom SMP opcodes are not in this tree; the app does Enrollment, LE SC, and Stealth Commitment at GAP.
+
 ## Simulator
 
 Rust crate [`sim/`](sim/) — PDU-level spec oracle, no radio. Lint is `rustfmt` + `clippy` (Biome is a JS/TS tool and does not apply).
